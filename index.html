@@ -56,14 +56,27 @@
      * Firebase 初期化
      **********************/
     // ▼▼▼ 必ず差し替え（Firebase ConsoleのWebアプリ設定） ▼▼▼
-    const firebaseConfig = {
-      apiKey: "YOUR_API_KEY",
-      authDomain: "YOUR_PROJECT.firebaseapp.com",
-      projectId: "YOUR_PROJECT_ID",
-      storageBucket: "YOUR_PROJECT.appspot.com",
-      messagingSenderId: "YOUR_SENDER_ID",
-      appId: "YOUR_APP_ID",
-    };
+    // Import the functions you need from the SDKs you need
+import { initializeApp } from "firebase/app";
+import { getAnalytics } from "firebase/analytics";
+// TODO: Add SDKs for Firebase products that you want to use
+// https://firebase.google.com/docs/web/setup#available-libraries
+
+// Your web app's Firebase configuration
+// For Firebase JS SDK v7.20.0 and later, measurementId is optional
+const firebaseConfig = {
+  apiKey: "AIzaSyAfO6ZAOlAZg-yG8ja3fR3U-zEnqMwmpw8",
+  authDomain: "ism2711-49523.firebaseapp.com",
+  projectId: "ism2711-49523",
+  storageBucket: "ism2711-49523.firebasestorage.app",
+  messagingSenderId: "44334771941",
+  appId: "1:44334771941:web:a55badc93b3f6bdf59ee0c",
+  measurementId: "G-M4SWCYYH82"
+};
+
+// Initialize Firebase
+const app = initializeApp(firebaseConfig);
+const analytics = getAnalytics(app);
     // ▲▲▲ ここまで ▲▲▲
 
     firebase.initializeApp(firebaseConfig);
