@@ -1,0 +1,2091 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+  <title>夷隅教育会館 管理（部屋予約・機材・動静）</title>
+
+  <!-- Tailwind -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- React (UMD) + Babel -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <!-- Firebase (CDN / compat) -->
+  <script src="https://www.gstatic.com/firebasejs/12.8.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/12.8.0/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/12.8.0/firebase-firestore-compat.js"></script>
+
+  <style>
+    body { -webkit-tap-highlight-color: transparent; }
+    .glass { backdrop-filter: blur(10px); }
+
+    /* ===== 印刷（A4横） ===== */
+    @media print {
+      @page { size: A4 landscape; margin: 10mm; }
+      body { background: #fff !important; }
+      .no-print { display: none !important; }
+      .print-only { display: block !important; }
+      .print-area { display: block !important; }
+      .print-card { break-inside: avoid; page-break-inside: avoid; }
+      .print-tight { font-size: 11px; }
+      .print-table td, .print-table th { padding: 6px !important; }
+    }
+    .print-only { display: none; }
+    .print-area { display: none; }
+  </style>
+</head>
+
+<body class="bg-slate-50 text-slate-800">
+  <div id="app"></div>
+
+  <script type="text/babel">
+    const { useEffect, useMemo, useRef, useState } = React;
+
+    /**********************
+     * 固定設定（共通ID方式）
+     **********************/
+    const SHARED_LOGIN_CODE = "ismkaikan";
+    const SHARED_EMAIL = `${SHARED_LOGIN_CODE}@shared.local`; // Firebase Authはメール形式が必要
+    const CACHE_PREFIX = "ismkaikan_cache_v2";
+    const OPS_KEY = "ismkaikan_ops_v1"; // read/write概算（月単位で保存）
+
+    /**********************
+     * Firebase 初期化
+     **********************/
+    // ▼▼▼ 必ず差し替え（Firebase ConsoleのWebアプリ設定） ▼▼▼
+    const firebaseConfig = {
+      apiKey: "YOUR_API_KEY",
+      authDomain: "YOUR_PROJECT.firebaseapp.com",
+      projectId: "YOUR_PROJECT_ID",
+      storageBucket: "YOUR_PROJECT.appspot.com",
+      messagingSenderId: "YOUR_SENDER_ID",
+      appId: "YOUR_APP_ID",
+    };
+    // ▲▲▲ ここまで ▲▲▲
+
+    firebase.initializeApp(firebaseConfig);
+    const auth = firebase.auth();
+    const db = firebase.firestore();
+    const serverTimestamp = firebase.firestore.FieldValue.serverTimestamp;
+
+    /**********************
+     * マスタ（部屋）
+     **********************/
+    const ROOMS = [
+      { id: "honkan_oo", name: "大会議室", building: "本館" },
+      { id: "honkan_chu", name: "中会議室", building: "本館" },
+      { id: "honkan_sho", name: "小会議室", building: "本館" },
+      { id: "honkan_ousetsu", name: "応接室", building: "本館" },
+      { id: "honkan_nihon", name: "日本間", building: "本館" },
+      { id: "honkan_print", name: "印刷室", building: "本館" },
+      { id: "honkan_library", name: "図書室", building: "本館" },
+      { id: "honkan_lab", name: "研究所", building: "本館" },
+      { id: "bekkan_1f", name: "１階会議室", building: "別館" },
+      { id: "bekkan_2f", name: "２階会議室", building: "別館" },
+    ];
+
+    const DEFAULT_EQUIPMENTS = [
+      { id: "projector", name: "プロジェクター", countTotal: 3, active: true },
+      { id: "pc", name: "PC", countTotal: 10, active: true },
+    ];
+
+    /**********************
+     * ユーティリティ
+     **********************/
+    function pad2(n){ return String(n).padStart(2,"0"); }
+
+    function todayKeyLocal(d = new Date()){
+      const y = d.getFullYear();
+      const m = pad2(d.getMonth()+1);
+      const day = pad2(d.getDate());
+      return `${y}-${m}-${day}`;
+    }
+
+    function monthKeyLocal(d = new Date()){
+      const y = d.getFullYear();
+      const m = pad2(d.getMonth()+1);
+      return `${y}-${m}`;
+    }
+
+    function parseKeyToDate(key){
+      const [y,m,d] = key.split("-").map(Number);
+      return new Date(y, m-1, d);
+    }
+
+    function addDaysKey(key, addDays){
+      const dt = parseKeyToDate(key);
+      dt.setDate(dt.getDate() + addDays);
+      return todayKeyLocal(dt);
+    }
+
+    function startOfWeekMonday(key){
+      const dt = parseKeyToDate(key);
+      // JS: 0=Sun ... 6=Sat
+      const dow = dt.getDay();
+      const diff = (dow === 0) ? -6 : (1 - dow); // Monday start
+      dt.setDate(dt.getDate() + diff);
+      return todayKeyLocal(dt);
+    }
+
+    function minToHHMM(min){
+      const h = Math.floor(min/60);
+      const m = min%60;
+      return `${pad2(h)}:${pad2(m)}`;
+    }
+
+    function hhmmToMin(hhmm){
+      const [h,m] = hhmm.split(":").map(Number);
+      return h*60+m;
+    }
+
+    function timeOptions10min(){
+      const opts = [];
+      for(let m=0; m<=23*60+50; m+=10){
+        opts.push({ label: minToHHMM(m), value: m });
+      }
+      return opts;
+    }
+
+    function classNames(...xs){ return xs.filter(Boolean).join(" "); }
+
+    function saveCache(key, value){
+      try{ localStorage.setItem(key, JSON.stringify({ at: Date.now(), value })); }catch(e){}
+    }
+    function loadCache(key){
+      try{
+        const raw = localStorage.getItem(key);
+        if(!raw) return null;
+        const parsed = JSON.parse(raw);
+        return parsed?.value ?? null;
+      }catch(e){ return null; }
+    }
+
+    function overlaps(aStart, aEnd, bStart, bEnd){
+      return (aStart < bEnd) && (bStart < aEnd);
+    }
+
+    function clampInt(n, min, max){
+      const v = Number(n);
+      if(Number.isNaN(v)) return min;
+      return Math.max(min, Math.min(max, Math.trunc(v)));
+    }
+
+    function isValidDateKey(key){
+      return /^\d{4}-\d{2}-\d{2}$/.test(key);
+    }
+
+    function downloadText(filename, text){
+      const blob = new Blob([text], { type:"text/csv;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    }
+
+    // RFC4180簡易CSVパーサ（クォート対応）
+    function parseCSV(text){
+      const rows = [];
+      let i = 0;
+      let field = "";
+      let row = [];
+      let inQuotes = false;
+
+      while(i < text.length){
+        const c = text[i];
+
+        if(inQuotes){
+          if(c === '"'){
+            if(text[i+1] === '"'){ // escaped quote
+              field += '"';
+              i += 2;
+              continue;
+            }else{
+              inQuotes = false;
+              i++;
+              continue;
+            }
+          }else{
+            field += c;
+            i++;
+            continue;
+          }
+        }else{
+          if(c === '"'){
+            inQuotes = true;
+            i++;
+            continue;
+          }
+          if(c === ","){
+            row.push(field);
+            field = "";
+            i++;
+            continue;
+          }
+          if(c === "\r"){
+            i++;
+            continue;
+          }
+          if(c === "\n"){
+            row.push(field);
+            rows.push(row);
+            row = [];
+            field = "";
+            i++;
+            continue;
+          }
+          field += c;
+          i++;
+        }
+      }
+      // last
+      row.push(field);
+      // 空行（末尾の改行だけ）を除外
+      const allEmpty = row.every(x => (x ?? "").trim() === "");
+      if(!allEmpty) rows.push(row);
+
+      return rows;
+    }
+
+    function toCSVRow(fields){
+      return fields.map(v => {
+        const s = (v ?? "").toString();
+        if(/[",\n]/.test(s)) return `"${s.replace(/"/g,'""')}"`;
+        return s;
+      }).join(",");
+    }
+
+    function roomName(roomId){
+      return ROOMS.find(r=>r.id===roomId)?.name ?? roomId;
+    }
+    function roomBuilding(roomId){
+      return ROOMS.find(r=>r.id===roomId)?.building ?? "";
+    }
+
+    /**********************
+     * UI部品
+     **********************/
+    const Pill = ({children, tone="slate"}) => {
+      const map = {
+        slate: "bg-slate-100 text-slate-700 border-slate-200",
+        sky: "bg-sky-50 text-sky-700 border-sky-200",
+        emerald: "bg-emerald-50 text-emerald-700 border-emerald-200",
+        rose: "bg-rose-50 text-rose-700 border-rose-200",
+        amber: "bg-amber-50 text-amber-700 border-amber-200",
+      };
+      return (
+        <span className={classNames("inline-flex items-center gap-1 px-2 py-1 rounded-xl text-[12px] font-bold border", map[tone] || map.slate)}>
+          {children}
+        </span>
+      );
+    };
+
+    const Card = ({children, printCard=false}) => (
+      <div className={classNames("bg-white rounded-3xl p-4 shadow-sm border border-slate-100", printCard ? "print-card" : "")}>
+        {children}
+      </div>
+    );
+
+    const SectionTitle = ({icon, title, sub, right}) => (
+      <div className="flex items-end justify-between gap-2 flex-wrap">
+        <div className="space-y-1">
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 rounded-2xl bg-slate-100 flex items-center justify-center text-slate-600 font-black">
+              {icon}
+            </div>
+            <div className="text-lg font-black text-slate-800">{title}</div>
+          </div>
+          {sub ? <div className="text-xs font-bold text-slate-400">{sub}</div> : null}
+        </div>
+        {right ? <div className="flex items-center gap-2">{right}</div> : null}
+      </div>
+    );
+
+    const Modal = ({open, onClose, title, children}) => {
+      if(!open) return null;
+      return (
+        <div className="fixed inset-0 z-50 no-print">
+          <div className="absolute inset-0 bg-black/30" onClick={onClose}></div>
+          <div className="absolute inset-x-0 bottom-0 md:inset-0 md:flex md:items-center md:justify-center p-3">
+            <div className="w-full md:max-w-2xl bg-white rounded-3xl shadow-xl border border-slate-100 overflow-hidden">
+              <div className="p-4 border-b border-slate-100 flex items-center justify-between">
+                <div className="font-black text-slate-800">{title}</div>
+                <button className="px-3 py-2 rounded-2xl bg-slate-100 font-black text-slate-700" onClick={onClose}>閉じる</button>
+              </div>
+              <div className="p-4 space-y-4">
+                {children}
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    };
+
+    function TabButton({active, onClick, children}){
+      return (
+        <button
+          onClick={onClick}
+          className={classNames(
+            "rounded-2xl py-3 font-black border shadow-sm",
+            active ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-700 border-slate-200"
+          )}
+        >
+          {children}
+        </button>
+      );
+    }
+
+    /**********************
+     * read/write概算カウンタ（月単位）
+     **********************/
+    function loadOps(){
+      const mk = monthKeyLocal();
+      try{
+        const raw = localStorage.getItem(OPS_KEY);
+        if(!raw) return { month: mk, reads: 0, writes: 0 };
+        const obj = JSON.parse(raw);
+        if(obj?.month !== mk){
+          return { month: mk, reads: 0, writes: 0 };
+        }
+        return {
+          month: mk,
+          reads: Number(obj.reads || 0),
+          writes: Number(obj.writes || 0),
+        };
+      }catch(e){
+        return { month: mk, reads: 0, writes: 0 };
+      }
+    }
+    function saveOps(ops){
+      try{ localStorage.setItem(OPS_KEY, JSON.stringify(ops)); }catch(e){}
+    }
+
+    /**********************
+     * メイン
+     **********************/
+    function App(){
+      const [user, setUser] = useState(null);
+      const [authReady, setAuthReady] = useState(false);
+
+      const [tab, setTab] = useState("home"); // home | reserve | equip | presence
+      const [selectedDate, setSelectedDate] = useState(todayKeyLocal());
+
+      const [busy, setBusy] = useState(false);
+      const [toast, setToast] = useState(null);
+
+      const [reservations, setReservations] = useState([]);     // 選択日
+      const [weekReservations, setWeekReservations] = useState([]); // 週表示用（週範囲）
+      const [presence, setPresence] = useState(null);
+      const [equipments, setEquipments] = useState(DEFAULT_EQUIPMENTS);
+
+      const [editorOpen, setEditorOpen] = useState(false);
+      const [editTarget, setEditTarget] = useState(null);
+
+      const [reserveView, setReserveView] = useState("day"); // day | week
+      const [csvOpen, setCsvOpen] = useState(false);
+
+      const [ops, setOps] = useState(loadOps()); // read/write概算
+
+      const isLoggedIn = !!user;
+      const opts10 = useMemo(() => timeOptions10min(), []);
+
+      const weekStart = useMemo(() => startOfWeekMonday(selectedDate), [selectedDate]);
+      const weekKeys = useMemo(() => Array.from({length:7}, (_,i)=>addDaysKey(weekStart, i)), [weekStart]);
+      const weekEnd = weekKeys[6];
+
+      // equipments map
+      const equipmentsMap = useMemo(() => {
+        const m = {};
+        for(const e of equipments || []) m[e.id] = e;
+        return m;
+      }, [equipments]);
+
+      // Auth監視
+      useEffect(() => {
+        const unsub = auth.onAuthStateChanged(u => {
+          setUser(u || null);
+          setAuthReady(true);
+        });
+        return () => unsub && unsub();
+      }, []);
+
+      // キャッシュ読み込み（選択日）
+      useEffect(() => {
+        const rKey = `${CACHE_PREFIX}:reservations:${selectedDate}`;
+        const pKey = `${CACHE_PREFIX}:presence:${selectedDate}`;
+        const eKey = `${CACHE_PREFIX}:equipments`;
+        const wKey = `${CACHE_PREFIX}:weekReservations:${weekStart}`;
+
+        const cr = loadCache(rKey);
+        const cp = loadCache(pKey);
+        const ce = loadCache(eKey);
+        const cw = loadCache(wKey);
+
+        if(cr) setReservations(cr);
+        if(cp) setPresence(cp);
+        if(ce) setEquipments(ce);
+        if(cw) setWeekReservations(cw);
+      }, [selectedDate, weekStart]);
+
+      // ops永続化
+      useEffect(() => { saveOps(ops); }, [ops]);
+
+      function bumpReads(n){
+        const mk = monthKeyLocal();
+        setOps(prev => {
+          const base = (prev.month === mk) ? prev : { month: mk, reads: 0, writes: 0 };
+          return { ...base, reads: base.reads + Number(n||0) };
+        });
+      }
+      function bumpWrites(n){
+        const mk = monthKeyLocal();
+        setOps(prev => {
+          const base = (prev.month === mk) ? prev : { month: mk, reads: 0, writes: 0 };
+          return { ...base, writes: base.writes + Number(n||0) };
+        });
+      }
+      function resetOps(){
+        const mk = monthKeyLocal();
+        if(!confirm(`${mk} の read/write（概算）をリセットしますか？`)) return;
+        setOps({ month: mk, reads: 0, writes: 0 });
+      }
+
+      // Firestore読込（手動更新）
+      async function refreshAll(){
+        setBusy(true);
+        try{
+          // 選択日の予約
+          const rsSnap = await db.collection("reservations")
+            .where("date","==",selectedDate)
+            .get();
+          bumpReads(rsSnap.size); // doc数ぶん
+
+          const rs = rsSnap.docs.map(d => ({ id: d.id, ...d.data() }))
+            .sort((a,b) => (a.roomId||"").localeCompare(b.roomId||"") || (a.startMin||0)-(b.startMin||0));
+          setReservations(rs);
+          saveCache(`${CACHE_PREFIX}:reservations:${selectedDate}`, rs);
+
+          // presence（選択日）: 1 read（存在しなくてもgetは読み相当として扱う）
+          const pDoc = await db.collection("presence").doc(selectedDate).get();
+          bumpReads(1);
+
+          const pv = pDoc.exists ? pDoc.data() : null;
+          setPresence(pv);
+          saveCache(`${CACHE_PREFIX}:presence:${selectedDate}`, pv);
+
+          // equipments（全体）
+          const eSnap = await db.collection("equipments").get();
+          bumpReads(eSnap.size);
+
+          const ev = eSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+          if(ev.length){
+            setEquipments(ev);
+            saveCache(`${CACHE_PREFIX}:equipments`, ev);
+          }else{
+            setEquipments(DEFAULT_EQUIPMENTS);
+          }
+
+          // 週表示用（reserveViewがweekなら週範囲も更新）
+          if(reserveView === "week"){
+            await refreshWeek();
+          }
+
+          setToast({ type:"ok", msg:"更新しました" });
+        }catch(err){
+          console.error(err);
+          setToast({ type:"ng", msg:"更新に失敗しました（Firestore設定/ルールを確認）" });
+        }finally{
+          setBusy(false);
+          setTimeout(()=>setToast(null), 2400);
+        }
+      }
+
+      async function refreshWeek(){
+        // weekStart〜weekEnd の予約をまとめて取得（dateに範囲クエリ）
+        const wSnap = await db.collection("reservations")
+          .where("date", ">=", weekStart)
+          .where("date", "<=", weekEnd)
+          .get();
+        bumpReads(wSnap.size);
+
+        const wr = wSnap.docs.map(d => ({ id: d.id, ...d.data() }))
+          .sort((a,b) =>
+            (a.date||"").localeCompare(b.date||"")
+            || (a.roomId||"").localeCompare(b.roomId||"")
+            || (a.startMin||0)-(b.startMin||0)
+          );
+        setWeekReservations(wr);
+        saveCache(`${CACHE_PREFIX}:weekReservations:${weekStart}`, wr);
+      }
+
+      // 共通IDログイン
+      async function loginWithShared(password){
+        setBusy(true);
+        try{
+          await auth.signInWithEmailAndPassword(SHARED_EMAIL, password);
+          // authログイン自体はread/writeに含めない（School Calの考え方に合わせて「Firestoreの概算」扱い）
+          setToast({ type:"ok", msg:"ログインしました（編集できます）" });
+        }catch(err){
+          console.error(err);
+          setToast({ type:"ng", msg:"ログインできません（PWが違う/ユーザー未作成）" });
+        }finally{
+          setBusy(false);
+          setTimeout(()=>setToast(null), 2600);
+        }
+      }
+
+      async function logout(){
+        await auth.signOut();
+        setToast({ type:"ok", msg:"ログアウトしました" });
+        setTimeout(()=>setToast(null), 2000);
+      }
+
+      function openNew(){
+        setEditTarget({
+          id: null,
+          date: selectedDate,
+          roomId: ROOMS[0].id,
+          startMin: hhmmToMin("09:00"),
+          endMin: hhmmToMin("10:00"),
+          groupName: "",
+          note: "",
+          equipment: { projector: 0, pc: 0 },
+        });
+        setEditorOpen(true);
+      }
+
+      function openEdit(r){
+        setEditTarget({
+          id: r.id,
+          date: r.date,
+          roomId: r.roomId,
+          startMin: r.startMin ?? 0,
+          endMin: r.endMin ?? 0,
+          groupName: r.groupName ?? "",
+          note: r.note ?? "",
+          equipment: {
+            projector: Number(r?.equipment?.projector ?? 0),
+            pc: Number(r?.equipment?.pc ?? 0),
+          },
+        });
+        setEditorOpen(true);
+      }
+
+      function getReservationsForDate(dateKey){
+        if(dateKey === selectedDate) return reservations;
+        // 週データがあればそこから
+        return (weekReservations || []).filter(x => x.date === dateKey);
+      }
+
+      async function saveReservation(model){
+        if(!isLoggedIn){
+          setToast({ type:"ng", msg:"編集にはログインが必要です" });
+          setTimeout(()=>setToast(null), 2200);
+          return;
+        }
+        const g = (model.groupName||"").trim();
+        if(!g){
+          setToast({ type:"ng", msg:"団体名は必須です" });
+          setTimeout(()=>setToast(null), 2200);
+          return;
+        }
+        const sMin = Number(model.startMin);
+        const eMin = Number(model.endMin);
+        if(!(eMin > sMin)){
+          setToast({ type:"ng", msg:"終了時刻は開始時刻より後にしてください" });
+          setTimeout(()=>setToast(null), 2200);
+          return;
+        }
+        if((sMin % 10 !== 0) || (eMin % 10 !== 0)){
+          setToast({ type:"ng", msg:"時刻は10分単位で入力してください" });
+          setTimeout(()=>setToast(null), 2200);
+          return;
+        }
+
+        // 同日の予約（状態から）
+        const sameDate = getReservationsForDate(model.date);
+        // 1) 部屋の重複チェック
+        const sameRoom = sameDate.filter(x => x.roomId===model.roomId && x.id !== model.id);
+        const conflict = sameRoom.some(x => overlaps(sMin, eMin, x.startMin||0, x.endMin||0));
+        if(conflict){
+          setToast({ type:"ng", msg:"同じ部屋で時間が重複しています（予約不可）" });
+          setTimeout(()=>setToast(null), 2600);
+          return;
+        }
+
+        // 2) 機材の同時間帯チェック（同日・全室が対象）
+        const overlapsAny = sameDate
+          .filter(x => x.id !== model.id)
+          .filter(x => overlaps(sMin, eMin, x.startMin||0, x.endMin||0));
+
+        const need = {
+          projector: Number(model?.equipment?.projector ?? 0),
+          pc: Number(model?.equipment?.pc ?? 0),
+        };
+
+        const used = { projector: 0, pc: 0 };
+        for(const r of overlapsAny){
+          used.projector += Number(r?.equipment?.projector ?? 0);
+          used.pc += Number(r?.equipment?.pc ?? 0);
+        }
+        const totals = {
+          projector: Number(equipmentsMap.projector?.countTotal ?? DEFAULT_EQUIPMENTS.find(x=>x.id==="projector")?.countTotal ?? 0),
+          pc: Number(equipmentsMap.pc?.countTotal ?? DEFAULT_EQUIPMENTS.find(x=>x.id==="pc")?.countTotal ?? 0),
+        };
+
+        const after = {
+          projector: used.projector + need.projector,
+          pc: used.pc + need.pc,
+        };
+
+        const warnings = [];
+        if(totals.projector > 0 && after.projector > totals.projector){
+          warnings.push(`プロジェクターが総数 ${totals.projector} を超えます（同時間帯 合計 ${after.projector}）`);
+        }
+        if(totals.pc > 0 && after.pc > totals.pc){
+          warnings.push(`PCが総数 ${totals.pc} を超えます（同時間帯 合計 ${after.pc}）`);
+        }
+
+        if(warnings.length){
+          const ok = confirm(
+            `【機材の警告】\n${warnings.join("\n")}\n\nそれでも保存しますか？`
+          );
+          if(!ok) return;
+        }
+
+        setBusy(true);
+        try{
+          const payload = {
+            date: model.date,
+            roomId: model.roomId,
+            startMin: sMin,
+            endMin: eMin,
+            groupName: g,
+            note: (model.note||"").trim(),
+            equipment: {
+              projector: Number(model?.equipment?.projector ?? 0),
+              pc: Number(model?.equipment?.pc ?? 0),
+            },
+            updatedAt: serverTimestamp(),
+          };
+
+          if(model.id){
+            await db.collection("reservations").doc(model.id).set(payload, { merge:true });
+            bumpWrites(1);
+          }else{
+            await db.collection("reservations").add({ ...payload, createdAt: serverTimestamp() });
+            bumpWrites(1);
+          }
+
+          setEditorOpen(false);
+          setEditTarget(null);
+
+          // 保存後：選択日/週の表示を崩さないよう更新
+          await refreshAll();
+          if(reserveView === "week"){
+            await refreshWeek();
+          }
+        }catch(err){
+          console.error(err);
+          setToast({ type:"ng", msg:"保存に失敗しました" });
+          setTimeout(()=>setToast(null), 2400);
+        }finally{
+          setBusy(false);
+        }
+      }
+
+      async function deleteReservation(id){
+        if(!isLoggedIn) return;
+        if(!confirm("この予約を削除しますか？")) return;
+        setBusy(true);
+        try{
+          await db.collection("reservations").doc(id).delete();
+          bumpWrites(1);
+          await refreshAll();
+          if(reserveView === "week"){
+            await refreshWeek();
+          }
+        }catch(err){
+          console.error(err);
+          setToast({ type:"ng", msg:"削除に失敗しました" });
+          setTimeout(()=>setToast(null), 2400);
+        }finally{
+          setBusy(false);
+        }
+      }
+
+      // presence更新（1 write相当）
+      async function setPresenceValue(personKey, slotKey, value){
+        if(!isLoggedIn){
+          setToast({ type:"ng", msg:"編集にはログインが必要です" });
+          setTimeout(()=>setToast(null), 2200);
+          return;
+        }
+        setBusy(true);
+        try{
+          const base = presence || {};
+          const next = {
+            ...base,
+            [personKey]: {
+              ...(base[personKey] || {}),
+              [slotKey]: value,
+            }
+          };
+          await db.collection("presence").doc(selectedDate).set(next, { merge:true });
+          bumpWrites(1);
+
+          setPresence(next);
+          saveCache(`${CACHE_PREFIX}:presence:${selectedDate}`, next);
+
+          setToast({ type:"ok", msg:"動静を保存しました" });
+          setTimeout(()=>setToast(null), 1600);
+        }catch(err){
+          console.error(err);
+          setToast({ type:"ng", msg:"動静の保存に失敗しました" });
+          setTimeout(()=>setToast(null), 2400);
+        }finally{
+          setBusy(false);
+        }
+      }
+
+      // equipments 初期データ作成（batch：件数分 write）
+      async function seedEquipments(){
+        if(!isLoggedIn) return;
+        if(!confirm("機材マスタ（初期データ）を作成しますか？\n※既にあるものは上書きしません")) return;
+        setBusy(true);
+        try{
+          const batch = db.batch();
+          let willWrite = 0;
+          for(const e of DEFAULT_EQUIPMENTS){
+            const ref = db.collection("equipments").doc(e.id);
+            const snap = await ref.get();
+            bumpReads(1);
+            if(!snap.exists){
+              batch.set(ref, { name:e.name, countTotal:e.countTotal, active:e.active, updatedAt: serverTimestamp() });
+              willWrite++;
+            }
+          }
+          await batch.commit();
+          bumpWrites(willWrite);
+
+          await refreshAll();
+          setToast({ type:"ok", msg:"機材マスタを作成しました" });
+          setTimeout(()=>setToast(null), 2200);
+        }catch(err){
+          console.error(err);
+          setToast({ type:"ng", msg:"作成に失敗しました" });
+          setTimeout(()=>setToast(null), 2400);
+        }finally{
+          setBusy(false);
+        }
+      }
+
+      // 日の表示用：機材使用（合計）
+      const equipmentUsed = useMemo(() => {
+        const used = { projector: 0, pc: 0 };
+        for(const r of reservations){
+          used.projector += Number(r?.equipment?.projector ?? 0);
+          used.pc += Number(r?.equipment?.pc ?? 0);
+        }
+        return used;
+      }, [reservations]);
+
+      // ダッシュボード用：部屋ごと（選択日）
+      const byRoom = useMemo(() => {
+        const map = {};
+        for(const rr of ROOMS) map[rr.id] = [];
+        for(const r of reservations){
+          if(!map[r.roomId]) map[r.roomId] = [];
+          map[r.roomId].push(r);
+        }
+        for(const k of Object.keys(map)){
+          map[k].sort((a,b)=>(a.startMin||0)-(b.startMin||0));
+        }
+        return map;
+      }, [reservations]);
+
+      // 週表示用： date -> roomId -> list
+      const weekMap = useMemo(() => {
+        const map = {};
+        for(const d of weekKeys){
+          map[d] = {};
+          for(const rr of ROOMS) map[d][rr.id] = [];
+        }
+        for(const r of weekReservations || []){
+          if(!map[r.date]) map[r.date] = {};
+          if(!map[r.date][r.roomId]) map[r.date][r.roomId] = [];
+          map[r.date][r.roomId].push(r);
+        }
+        for(const d of Object.keys(map)){
+          for(const rid of Object.keys(map[d])){
+            map[d][rid].sort((a,b)=>(a.startMin||0)-(b.startMin||0));
+          }
+        }
+        return map;
+      }, [weekReservations, weekKeys]);
+
+      // 印刷：reserveViewに応じて表示するprintAreaを切替
+      function doPrint(){
+        // 印刷前に最低限の整合：週表示なら週データを持っておく（任意）
+        window.print();
+      }
+
+      // CSV：エクスポート（範囲）
+      async function exportCSV(rangeStart, rangeEnd){
+        if(!isValidDateKey(rangeStart) || !isValidDateKey(rangeEnd)){
+          alert("日付範囲が正しくありません");
+          return;
+        }
+        if(rangeEnd < rangeStart){
+          alert("終了日は開始日以降にしてください");
+          return;
+        }
+        setBusy(true);
+        try{
+          const snap = await db.collection("reservations")
+            .where("date", ">=", rangeStart)
+            .where("date", "<=", rangeEnd)
+            .get();
+          bumpReads(snap.size);
+
+          const list = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+            .sort((a,b)=> (a.date||"").localeCompare(b.date||"") || (a.roomId||"").localeCompare(b.roomId||"") || (a.startMin||0)-(b.startMin||0));
+
+          const header = [
+            "id",
+            "date",
+            "building",
+            "roomId",
+            "roomName",
+            "start",
+            "end",
+            "groupName",
+            "projector",
+            "pc",
+            "note"
+          ];
+          const lines = [toCSVRow(header)];
+          for(const r of list){
+            lines.push(toCSVRow([
+              r.id,
+              r.date,
+              roomBuilding(r.roomId),
+              r.roomId,
+              roomName(r.roomId),
+              minToHHMM(r.startMin||0),
+              minToHHMM(r.endMin||0),
+              r.groupName || "",
+              Number(r?.equipment?.projector ?? 0),
+              Number(r?.equipment?.pc ?? 0),
+              r.note || ""
+            ]));
+          }
+          const csv = lines.join("\n");
+          const filename = `ismkaikan_reservations_${rangeStart}_to_${rangeEnd}.csv`;
+          downloadText(filename, csv);
+
+          setToast({ type:"ok", msg:"CSVを書き出しました" });
+          setTimeout(()=>setToast(null), 2000);
+        }catch(err){
+          console.error(err);
+          alert("CSV書き出しに失敗しました");
+        }finally{
+          setBusy(false);
+        }
+      }
+
+      // CSV：インポート（追加方式：重複はスキップ or 指定IDがあれば更新）
+      async function importCSV(file){
+        if(!isLoggedIn){
+          alert("インポートはログイン後に行ってください");
+          return;
+        }
+        const text = await file.text();
+        const rows = parseCSV(text);
+        if(rows.length < 2){
+          alert("CSVにデータがありません");
+          return;
+        }
+
+        const header = rows[0].map(x => (x||"").trim());
+        const idx = (name) => header.findIndex(h => h === name);
+
+        const i_id = idx("id");
+        const i_date = idx("date");
+        const i_roomId = idx("roomId");
+        const i_roomName = idx("roomName");
+        const i_building = idx("building");
+        const i_start = idx("start");
+        const i_end = idx("end");
+        const i_group = idx("groupName");
+        const i_pj = idx("projector");
+        const i_pc = idx("pc");
+        const i_note = idx("note");
+
+        // 必須最低限
+        if(i_date < 0 || (i_roomId < 0 && i_roomName < 0) || i_start < 0 || i_end < 0 || i_group < 0){
+          alert("CSVのヘッダが不足しています。\n必須: date, roomId(またはroomName), start, end, groupName");
+          return;
+        }
+
+        // row -> model
+        const parsed = [];
+        const errors = [];
+
+        for(let r=1; r<rows.length; r++){
+          const row = rows[r];
+          const get = (i) => (i>=0 ? (row[i] ?? "").trim() : "");
+
+          const date = get(i_date);
+          const startStr = get(i_start);
+          const endStr = get(i_end);
+          const groupName = get(i_group);
+
+          let roomId = get(i_roomId);
+          const roomNameVal = get(i_roomName);
+          const buildingVal = get(i_building);
+
+          if(!isValidDateKey(date)){
+            errors.push(`行${r+1}: dateが不正 (${date})`);
+            continue;
+          }
+          if(!/^\d{2}:\d{2}$/.test(startStr) || !/^\d{2}:\d{2}$/.test(endStr)){
+            errors.push(`行${r+1}: start/endが不正 (${startStr} - ${endStr})`);
+            continue;
+          }
+          const startMin = hhmmToMin(startStr);
+          const endMin = hhmmToMin(endStr);
+          if(startMin % 10 !== 0 || endMin % 10 !== 0){
+            errors.push(`行${r+1}: 時刻が10分単位ではありません (${startStr} - ${endStr})`);
+            continue;
+          }
+          if(!(endMin > startMin)){
+            errors.push(`行${r+1}: endはstartより後にしてください (${startStr} - ${endStr})`);
+            continue;
+          }
+          if(!groupName){
+            errors.push(`行${r+1}: groupNameが空です`);
+            continue;
+          }
+
+          if(!roomId){
+            // roomName + building から推定
+            const cand = ROOMS.filter(x => x.name === roomNameVal && (!buildingVal || x.building === buildingVal));
+            if(cand.length === 1) roomId = cand[0].id;
+          }
+          if(!roomId || !ROOMS.some(x=>x.id===roomId)){
+            errors.push(`行${r+1}: roomId/roomNameから部屋を特定できません (${roomId || roomNameVal})`);
+            continue;
+          }
+
+          const id = get(i_id) || null;
+          const projector = clampInt(get(i_pj) || 0, 0, 999);
+          const pc = clampInt(get(i_pc) || 0, 0, 999);
+          const note = get(i_note);
+
+          parsed.push({
+            id,
+            date,
+            roomId,
+            startMin,
+            endMin,
+            groupName,
+            equipment: { projector, pc },
+            note,
+          });
+        }
+
+        if(errors.length){
+          alert("CSVにエラーがあります。先頭のみ表示します。\n\n" + errors.slice(0, 10).join("\n"));
+          // エラーがあっても、正しい行だけ取り込む運用もあるが、事故防止で一旦止める
+          return;
+        }
+        if(parsed.length === 0){
+          alert("取り込める行がありません");
+          return;
+        }
+
+        // 取り込み対象の日付範囲をまとめて取得して、重複チェックに使う
+        const dates = Array.from(new Set(parsed.map(x=>x.date))).sort();
+        const rangeStart = dates[0];
+        const rangeEnd = dates[dates.length-1];
+
+        setBusy(true);
+        try{
+          const snap = await db.collection("reservations")
+            .where("date", ">=", rangeStart)
+            .where("date", "<=", rangeEnd)
+            .get();
+          bumpReads(snap.size);
+
+          const existing = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+          // map by date
+          const byDate = {};
+          for(const r of existing){
+            if(!byDate[r.date]) byDate[r.date] = [];
+            byDate[r.date].push(r);
+          }
+
+          // 追加/更新判定 + 予約重複チェック（部屋重複はスキップ）
+          let addCount = 0;
+          let updateCount = 0;
+          let skipCount = 0;
+
+          // batch書き込み（最大400件/バッチ安全）
+          const toWrite = [];
+
+          for(const m of parsed){
+            const sameDate = byDate[m.date] || [];
+            // 部屋重複（同一部屋）
+            const sameRoom = sameDate.filter(x => x.roomId === m.roomId && x.id !== m.id);
+            const conflict = sameRoom.some(x => overlaps(m.startMin, m.endMin, x.startMin||0, x.endMin||0));
+            if(conflict){
+              skipCount++;
+              continue;
+            }
+
+            // 機材超過チェックは「警告」だが、インポートは大量なので、超過はスキップ扱いにする（事故防止）
+            const overlapsAny = sameDate.filter(x => x.id !== m.id).filter(x => overlaps(m.startMin, m.endMin, x.startMin||0, x.endMin||0));
+            const used = { projector: 0, pc: 0 };
+            for(const r of overlapsAny){
+              used.projector += Number(r?.equipment?.projector ?? 0);
+              used.pc += Number(r?.equipment?.pc ?? 0);
+            }
+            const totals = {
+              projector: Number(equipmentsMap.projector?.countTotal ?? DEFAULT_EQUIPMENTS.find(x=>x.id==="projector")?.countTotal ?? 0),
+              pc: Number(equipmentsMap.pc?.countTotal ?? DEFAULT_EQUIPMENTS.find(x=>x.id==="pc")?.countTotal ?? 0),
+            };
+            const after = { projector: used.projector + m.equipment.projector, pc: used.pc + m.equipment.pc };
+            const over =
+              (totals.projector>0 && after.projector>totals.projector) ||
+              (totals.pc>0 && after.pc>totals.pc);
+            if(over){
+              skipCount++;
+              continue;
+            }
+
+            const payload = {
+              date: m.date,
+              roomId: m.roomId,
+              startMin: m.startMin,
+              endMin: m.endMin,
+              groupName: (m.groupName||"").trim(),
+              note: (m.note||"").trim(),
+              equipment: {
+                projector: Number(m?.equipment?.projector ?? 0),
+                pc: Number(m?.equipment?.pc ?? 0),
+              },
+              updatedAt: serverTimestamp(),
+            };
+
+            if(m.id){
+              // 更新（idがFirestoreのidと一致する想定）
+              toWrite.push({ type:"set", id: m.id, payload });
+              updateCount++;
+            }else{
+              toWrite.push({ type:"add", payload });
+              addCount++;
+            }
+
+            // 以降の重複判定に反映（仮反映）
+            if(!byDate[m.date]) byDate[m.date] = [];
+            byDate[m.date].push({ ...payload, id: m.id || ("(new_"+Math.random().toString(16).slice(2)+")") });
+          }
+
+          // 書き込み実行（batch chunk）
+          let totalWrites = 0;
+          let cursor = 0;
+          while(cursor < toWrite.length){
+            const chunk = toWrite.slice(cursor, cursor + 400);
+            const batch = db.batch();
+
+            for(const item of chunk){
+              if(item.type === "set"){
+                const ref = db.collection("reservations").doc(item.id);
+                batch.set(ref, item.payload, { merge:true });
+                totalWrites += 1;
+              }else{
+                // addはbatchにできないので、ここは個別で（compat制約回避）
+              }
+            }
+
+            // add（個別）
+            // ※ addは書き込み回数が多いが、失敗しにくい。必要なら将来doc ID生成してbatch setへ拡張可。
+            await batch.commit();
+            cursor += 400;
+          }
+
+          // add分を個別実行
+          for(const item of toWrite.filter(x=>x.type==="add")){
+            await db.collection("reservations").add({ ...item.payload, createdAt: serverTimestamp() });
+            totalWrites += 1;
+          }
+          bumpWrites(totalWrites);
+
+          alert(`CSVインポート完了\n追加: ${addCount}\n更新: ${updateCount}\nスキップ(重複/機材超過): ${skipCount}`);
+          await refreshAll();
+          if(reserveView === "week") await refreshWeek();
+        }catch(err){
+          console.error(err);
+          alert("インポートに失敗しました");
+        }finally{
+          setBusy(false);
+        }
+      }
+
+      // 週表示に切り替えたとき、週データが空なら更新を促す（自動で取るとreadが増えるので維持）
+      useEffect(() => {
+        if(tab === "reserve" && reserveView === "week"){
+          // キャッシュが無い/古い可能性があるので、未取得なら軽く誘導
+          // （自動取得したければここで refreshWeek を呼べます）
+        }
+      }, [tab, reserveView]);
+
+      // 週表示：セル用の表示（短く）
+      function cellText(r){
+        return `${minToHHMM(r.startMin||0)}-${minToHHMM(r.endMin||0)} ${r.groupName||""}`;
+      }
+
+      return (
+        <div className="max-w-6xl mx-auto p-4 space-y-4 pb-28">
+
+          {/* ===== ヘッダー（印刷では非表示） ===== */}
+          <div className="sticky top-0 z-40 -mx-4 px-4 py-3 bg-slate-50/80 glass border-b border-slate-100 no-print">
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <div className="space-y-0.5">
+                <div className="text-xs font-black text-slate-500">夷隅教育会館</div>
+                <div className="text-lg font-black text-slate-800">管理アプリ（部屋予約・機材・動静）</div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <input
+                  type="date"
+                  className="rounded-2xl border border-slate-200 bg-white px-3 py-2 font-bold text-slate-700"
+                  value={selectedDate}
+                  onChange={(e)=>setSelectedDate(e.target.value)}
+                />
+
+                <button
+                  className={classNames("rounded-2xl px-4 py-2 font-black border shadow-sm",
+                    busy ? "bg-slate-100 text-slate-400 border-slate-200" : "bg-sky-600 text-white border-sky-600")}
+                  onClick={refreshAll}
+                  disabled={busy}
+                  title="Firestoreから読み込み"
+                >
+                  更新
+                </button>
+
+                {isLoggedIn ? (
+                  <button className="rounded-2xl px-3 py-2 font-black bg-white border border-slate-200 text-slate-700"
+                    onClick={logout}
+                  >
+                    ログアウト
+                  </button>
+                ) : (
+                  <LoginButton busy={busy} onLogin={loginWithShared} />
+                )}
+              </div>
+            </div>
+
+            <div className="mt-3 flex items-center gap-2 flex-wrap">
+              <Pill tone={isLoggedIn ? "emerald" : "slate"}>
+                {isLoggedIn ? "編集モード（ログイン中）" : "閲覧モード（ログインなし）"}
+              </Pill>
+              <Pill tone="sky">共通ID：{SHARED_LOGIN_CODE}</Pill>
+              <Pill tone="slate">予約単位：10分</Pill>
+              <Pill tone="amber">概算 reads：{ops.reads}</Pill>
+              <Pill tone="amber">概算 writes：{ops.writes}</Pill>
+              <button
+                className="px-3 py-1.5 rounded-xl bg-white border border-slate-200 font-black text-xs text-slate-700"
+                onClick={resetOps}
+                title="今月の概算カウントをリセット"
+              >
+                read/write リセット
+              </button>
+              {busy ? <Pill tone="amber">処理中…</Pill> : null}
+            </div>
+          </div>
+
+          {/* Tabs */}
+          <div className="grid grid-cols-4 gap-2 no-print">
+            <TabButton active={tab==="home"} onClick={()=>setTab("home")}>全体</TabButton>
+            <TabButton active={tab==="reserve"} onClick={()=>setTab("reserve")}>部屋予約</TabButton>
+            <TabButton active={tab==="equip"} onClick={()=>setTab("equip")}>機材</TabButton>
+            <TabButton active={tab==="presence"} onClick={()=>setTab("presence")}>動静</TabButton>
+          </div>
+
+          {/* ===== 全体 ===== */}
+          {tab==="home" && (
+            <div className="space-y-4">
+              <Card printCard>
+                <SectionTitle
+                  icon="🏠"
+                  title="今日の状況"
+                  sub="まずはここだけ見ればOK"
+                  right={
+                    isLoggedIn ? (
+                      <button
+                        className="rounded-2xl px-4 py-2 font-black bg-emerald-600 text-white border border-emerald-600 shadow-sm no-print"
+                        onClick={openNew}
+                      >
+                        ＋予約追加
+                      </button>
+                    ) : null
+                  }
+                />
+                <div className="mt-4 grid md:grid-cols-3 gap-3">
+                  <div className="rounded-3xl border border-slate-100 bg-slate-50 p-4">
+                    <div className="text-xs font-black text-slate-500">部屋予約（件数）</div>
+                    <div className="text-3xl font-black text-slate-800 mt-1">{reservations.length}</div>
+                    <div className="text-xs font-bold text-slate-400 mt-2">日付：{selectedDate}</div>
+                  </div>
+
+                  <div className="rounded-3xl border border-slate-100 bg-slate-50 p-4 space-y-2">
+                    <div className="text-xs font-black text-slate-500">機材使用（合計）</div>
+                    <div className="flex items-center justify-between">
+                      <div className="font-black text-slate-800">プロジェクター</div>
+                      <div className="font-black text-slate-800">
+                        {equipmentUsed.projector} / {equipmentsMap.projector?.countTotal ?? "—"}
+                      </div>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <div className="font-black text-slate-800">PC</div>
+                      <div className="font-black text-slate-800">
+                        {equipmentUsed.pc} / {equipmentsMap.pc?.countTotal ?? "—"}
+                      </div>
+                    </div>
+                    <div className="text-xs font-bold text-slate-400">※予約に紐づく「使用台数」の合計</div>
+                  </div>
+
+                  <div className="rounded-3xl border border-slate-100 bg-slate-50 p-4">
+                    <div className="text-xs font-black text-slate-500">動静（今日）</div>
+                    <div className="mt-2 space-y-2">
+                      <PresenceMini label="書記長" data={presence?.chief}/>
+                      <PresenceMini label="書記次長" data={presence?.deputy}/>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-4 text-sm font-black text-slate-700">部屋ごとの予約（{selectedDate}）</div>
+
+                <div className="mt-3 grid md:grid-cols-2 gap-3">
+                  {ROOMS.map(room => (
+                    <div key={room.id} className="rounded-3xl border border-slate-100 p-4">
+                      <div className="flex items-center justify-between">
+                        <div className="space-y-0.5">
+                          <div className="text-xs font-black text-slate-400">{room.building}</div>
+                          <div className="font-black text-slate-800">{room.name}</div>
+                        </div>
+                        <Pill tone="slate">{(byRoom[room.id]||[]).length}件</Pill>
+                      </div>
+
+                      <div className="mt-3 space-y-2">
+                        {(byRoom[room.id]||[]).length === 0 ? (
+                          <div className="text-xs font-bold text-slate-400">予約なし</div>
+                        ) : (
+                          (byRoom[room.id]||[]).map(r => (
+                            <div key={r.id} className="flex items-start justify-between gap-2 p-3 rounded-2xl bg-slate-50 border border-slate-100">
+                              <div className="min-w-0">
+                                <div className="font-black text-slate-800">
+                                  {minToHHMM(r.startMin||0)}–{minToHHMM(r.endMin||0)} / {r.groupName}
+                                </div>
+                                <div className="text-xs font-bold text-slate-500 mt-1 flex gap-2 flex-wrap">
+                                  {(Number(r?.equipment?.projector||0)>0) && <Pill tone="sky">PJ {r.equipment.projector}</Pill>}
+                                  {(Number(r?.equipment?.pc||0)>0) && <Pill tone="sky">PC {r.equipment.pc}</Pill>}
+                                  {r.note ? <Pill tone="slate">メモ</Pill> : null}
+                                </div>
+                              </div>
+
+                              {isLoggedIn ? (
+                                <div className="shrink-0 flex items-center gap-2 no-print">
+                                  <button className="px-3 py-2 rounded-2xl bg-white border border-slate-200 font-black text-slate-700"
+                                    onClick={()=>openEdit(r)}
+                                  >
+                                    編集
+                                  </button>
+                                </div>
+                              ) : null}
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </Card>
+            </div>
+          )}
+
+          {/* ===== 部屋予約 ===== */}
+          {tab==="reserve" && (
+            <div className="space-y-4">
+              <Card printCard>
+                <SectionTitle
+                  icon="📅"
+                  title="部屋予約"
+                  sub={reserveView==="day" ? "日表示（選択中の日付）" : `週表示（${weekStart}〜${weekEnd}）`}
+                  right={
+                    <div className="flex items-center gap-2 flex-wrap no-print">
+                      <button
+                        className={classNames("px-4 py-2 rounded-2xl font-black border shadow-sm",
+                          reserveView==="day" ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-700 border-slate-200")}
+                        onClick={()=>setReserveView("day")}
+                      >
+                        日表示
+                      </button>
+                      <button
+                        className={classNames("px-4 py-2 rounded-2xl font-black border shadow-sm",
+                          reserveView==="week" ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-700 border-slate-200")}
+                        onClick={async ()=>{
+                          setReserveView("week");
+                          // 切替時に週データを持っていなければ軽く取得（更新ボタン方式を尊重しつつ、ここだけ自動）
+                          if((weekReservations||[]).length===0){
+                            setBusy(true);
+                            try{ await refreshWeek(); } finally { setBusy(false); }
+                          }
+                        }}
+                      >
+                        週表示
+                      </button>
+
+                      {isLoggedIn ? (
+                        <button
+                          className="rounded-2xl px-4 py-2 font-black bg-emerald-600 text-white border border-emerald-600 shadow-sm"
+                          onClick={openNew}
+                        >
+                          ＋予約追加
+                        </button>
+                      ) : null}
+
+                      <button
+                        className="rounded-2xl px-4 py-2 font-black bg-white border border-slate-200 text-slate-700"
+                        onClick={()=>setCsvOpen(true)}
+                      >
+                        CSV/印刷
+                      </button>
+
+                      <button
+                        className="rounded-2xl px-4 py-2 font-black bg-white border border-slate-200 text-slate-700"
+                        onClick={doPrint}
+                        title="A4横で印刷"
+                      >
+                        印刷
+                      </button>
+                    </div>
+                  }
+                />
+
+                {/* 日表示 */}
+                {reserveView==="day" && (
+                  <div className="mt-4 space-y-2">
+                    {reservations.length===0 ? (
+                      <div className="text-sm font-bold text-slate-400 p-3">予約がありません（更新で読み込み）</div>
+                    ) : reservations
+                      .slice()
+                      .sort((a,b)=> (a.startMin||0)-(b.startMin||0))
+                      .map(r => (
+                        <div key={r.id} className="p-4 rounded-3xl border border-slate-100 bg-white">
+                          <div className="flex items-start justify-between gap-3 flex-wrap">
+                            <div className="space-y-1 min-w-0">
+                              <div className="text-xs font-black text-slate-400">
+                                {roomBuilding(r.roomId)} / {roomName(r.roomId)}
+                              </div>
+                              <div className="text-base font-black text-slate-800">
+                                {minToHHMM(r.startMin||0)}–{minToHHMM(r.endMin||0)}　{r.groupName}
+                              </div>
+                              <div className="text-xs font-bold text-slate-500 flex gap-2 flex-wrap">
+                                {(Number(r?.equipment?.projector||0)>0) && <Pill tone="sky">PJ {r.equipment.projector}</Pill>}
+                                {(Number(r?.equipment?.pc||0)>0) && <Pill tone="sky">PC {r.equipment.pc}</Pill>}
+                                {r.note ? <Pill tone="slate">{r.note}</Pill> : <span className="text-slate-400">メモなし</span>}
+                              </div>
+                            </div>
+
+                            {isLoggedIn ? (
+                              <div className="flex items-center gap-2 no-print">
+                                <button className="px-4 py-2 rounded-2xl bg-slate-100 font-black text-slate-700"
+                                  onClick={()=>openEdit(r)}
+                                >
+                                  編集
+                                </button>
+                                <button className="px-4 py-2 rounded-2xl bg-rose-50 border border-rose-100 font-black text-rose-700"
+                                  onClick={()=>deleteReservation(r.id)}
+                                >
+                                  削除
+                                </button>
+                              </div>
+                            ) : null}
+                          </div>
+                        </div>
+                      ))}
+                  </div>
+                )}
+
+                {/* 週表示（部屋×曜日） */}
+                {reserveView==="week" && (
+                  <div className="mt-4 overflow-x-auto">
+                    <table className="min-w-[1100px] w-full border-separate border-spacing-2 print-table print-tight">
+                      <thead>
+                        <tr>
+                          <th className="text-left text-xs font-black text-slate-500 px-3 py-2">部屋</th>
+                          {weekKeys.map(d => (
+                            <th key={d} className="text-left text-xs font-black text-slate-600 px-3 py-2 bg-slate-50 border border-slate-100 rounded-2xl">
+                              <div className="font-black">{d}</div>
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {ROOMS.map(room => (
+                          <tr key={room.id}>
+                            <td className="align-top px-3 py-3 bg-white border border-slate-100 rounded-2xl">
+                              <div className="text-[11px] font-black text-slate-400">{room.building}</div>
+                              <div className="font-black text-slate-800">{room.name}</div>
+                            </td>
+                            {weekKeys.map(d => {
+                              const list = (weekMap[d]?.[room.id] || []);
+                              return (
+                                <td key={d} className="align-top px-3 py-3 bg-white border border-slate-100 rounded-2xl">
+                                  {list.length===0 ? (
+                                    <div className="text-xs font-bold text-slate-300">—</div>
+                                  ) : (
+                                    <div className="space-y-2">
+                                      {list.map(r => (
+                                        <div key={r.id} className="p-2 rounded-2xl bg-slate-50 border border-slate-100">
+                                          <div className="font-black text-slate-800 text-xs">
+                                            {cellText(r)}
+                                          </div>
+                                          <div className="mt-1 flex gap-1 flex-wrap">
+                                            {(Number(r?.equipment?.projector||0)>0) && <span className="text-[10px] font-black text-sky-700">PJ{r.equipment.projector}</span>}
+                                            {(Number(r?.equipment?.pc||0)>0) && <span className="text-[10px] font-black text-sky-700">PC{r.equipment.pc}</span>}
+                                          </div>
+                                          {isLoggedIn ? (
+                                            <div className="mt-2 flex gap-2 no-print">
+                                              <button className="px-3 py-1.5 rounded-2xl bg-white border border-slate-200 font-black text-xs text-slate-700"
+                                                onClick={()=>openEdit(r)}
+                                              >
+                                                編集
+                                              </button>
+                                            </div>
+                                          ) : null}
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                                </td>
+                              );
+                            })}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    <div className="mt-3 text-xs font-bold text-slate-400 no-print">
+                      ※週表示の内容は「週表示に切替」または「更新」で読み込み（概算readに反映されます）
+                    </div>
+                  </div>
+                )}
+              </Card>
+
+              {/* 印刷用（画面の週/日表示に近い形で出す） */}
+              <div className="print-area">
+                <div className="text-lg font-black">夷隅教育会館 予約表</div>
+                <div className="text-sm font-bold text-slate-600">
+                  {reserveView==="day" ? `日付：${selectedDate}` : `週：${weekStart}〜${weekEnd}`}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ===== 機材 ===== */}
+          {tab==="equip" && (
+            <div className="space-y-4">
+              <Card printCard>
+                <SectionTitle icon="🧰" title="機材" sub="総数（マスタ）と、予約に紐づく使用数を管理" />
+                <div className="mt-4 flex items-center justify-between flex-wrap gap-2">
+                  <div className="text-sm font-black text-slate-700">機材マスタ</div>
+                  {isLoggedIn ? (
+                    <button className="rounded-2xl px-4 py-2 font-black bg-white border border-slate-200 text-slate-700 no-print"
+                      onClick={seedEquipments}
+                    >
+                      初期データ作成
+                    </button>
+                  ) : (
+                    <div className="text-xs font-bold text-slate-400">※編集はログイン後</div>
+                  )}
+                </div>
+
+                <div className="mt-3 grid md:grid-cols-2 gap-3">
+                  {(equipments || []).map(e => (
+                    <div key={e.id} className="p-4 rounded-3xl border border-slate-100 bg-slate-50">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="font-black text-slate-800">{e.name}</div>
+                        <Pill tone="slate">総数：{e.countTotal ?? "—"}</Pill>
+                      </div>
+                      <div className="mt-2 text-xs font-bold text-slate-500">
+                        ※総数変更UIは必要なら追加できます（今はMVP）
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="mt-4 rounded-3xl border border-slate-100 bg-white p-4">
+                  <div className="font-black text-slate-800">この日の使用合計（予約から集計）</div>
+                  <div className="mt-2 text-sm font-bold text-slate-700">
+                    プロジェクター：{equipmentUsed.projector} ／ PC：{equipmentUsed.pc}
+                  </div>
+                  <div className="mt-1 text-xs font-bold text-slate-400">
+                    ※同時間帯チェックは「保存時」に動きます（超過すると警告）
+                  </div>
+                </div>
+              </Card>
+            </div>
+          )}
+
+          {/* ===== 動静 ===== */}
+          {tab==="presence" && (
+            <div className="space-y-4">
+              <Card printCard>
+                <SectionTitle icon="🟢" title="動静" sub="午前・午後・夕方（ワンタップで更新）" />
+
+                <div className="mt-4 grid md:grid-cols-2 gap-3">
+                  <PresenceEditor
+                    title="書記長"
+                    value={presence?.chief || {}}
+                    onSet={(slot,val)=>setPresenceValue("chief", slot, val)}
+                    disabled={!isLoggedIn || busy}
+                  />
+                  <PresenceEditor
+                    title="書記次長"
+                    value={presence?.deputy || {}}
+                    onSet={(slot,val)=>setPresenceValue("deputy", slot, val)}
+                    disabled={!isLoggedIn || busy}
+                  />
+                </div>
+
+                {!isLoggedIn ? (
+                  <div className="mt-3 text-xs font-bold text-slate-400">※動静の更新はログイン後</div>
+                ) : null}
+              </Card>
+            </div>
+          )}
+
+          {/* ===== 予約編集モーダル ===== */}
+          <Modal
+            open={editorOpen}
+            onClose={()=>{ setEditorOpen(false); setEditTarget(null); }}
+            title={editTarget?.id ? "予約を編集" : "予約を追加"}
+          >
+            {editTarget ? (
+              <ReservationEditor
+                model={editTarget}
+                setModel={setEditTarget}
+                rooms={ROOMS}
+                opts10={opts10}
+                onSave={saveReservation}
+                onCancel={()=>{ setEditorOpen(false); setEditTarget(null); }}
+                busy={busy}
+                isLoggedIn={isLoggedIn}
+              />
+            ) : null}
+          </Modal>
+
+          {/* ===== CSV/印刷モーダル ===== */}
+          <Modal
+            open={csvOpen}
+            onClose={()=>setCsvOpen(false)}
+            title="CSV 入出力 / 印刷（A4横）"
+          >
+            <div className="space-y-4">
+              <div className="rounded-3xl bg-slate-50 border border-slate-100 p-4">
+                <div className="font-black text-slate-800">印刷（A4横）</div>
+                <div className="text-xs font-bold text-slate-500 mt-1">
+                  画面の「日表示/週表示」そのまま印刷できます。
+                </div>
+                <div className="mt-3 flex gap-2 flex-wrap">
+                  <button
+                    className="px-4 py-2 rounded-2xl bg-white border border-slate-200 font-black text-slate-700"
+                    onClick={()=>{ setCsvOpen(false); setTimeout(()=>window.print(), 100); }}
+                  >
+                    今の画面を印刷
+                  </button>
+                </div>
+              </div>
+
+              <div className="rounded-3xl bg-slate-50 border border-slate-100 p-4">
+                <div className="font-black text-slate-800">CSV エクスポート（予約）</div>
+                <div className="text-xs font-bold text-slate-500 mt-1">
+                  週表示なら「週の範囲」、日表示なら「その日」をおすすめ。
+                </div>
+                <CSVExportPanel
+                  selectedDate={selectedDate}
+                  weekStart={weekStart}
+                  weekEnd={weekEnd}
+                  reserveView={reserveView}
+                  onExport={exportCSV}
+                  busy={busy}
+                />
+              </div>
+
+              <div className="rounded-3xl bg-slate-50 border border-slate-100 p-4">
+                <div className="font-black text-slate-800">CSV インポート（予約）</div>
+                <div className="text-xs font-bold text-slate-500 mt-1">
+                  ※ログインが必要です。重複（同室同時間）/機材超過はスキップして安全に取り込みます。
+                </div>
+                <CSVImportPanel
+                  disabled={!isLoggedIn || busy}
+                  onImport={importCSV}
+                />
+              </div>
+
+              <div className="text-xs font-bold text-slate-400">
+                CSVヘッダ例：id,date,building,roomId,roomName,start,end,groupName,projector,pc,note
+              </div>
+            </div>
+          </Modal>
+
+          {/* ===== Toast ===== */}
+          {toast ? (
+            <div className={classNames(
+              "fixed left-1/2 -translate-x-1/2 bottom-4 z-50 px-4 py-3 rounded-3xl shadow-lg border font-black no-print",
+              toast.type==="ok" ? "bg-emerald-600 text-white border-emerald-700" : "bg-rose-600 text-white border-rose-700"
+            )}>
+              {toast.msg}
+            </div>
+          ) : null}
+
+          {/* Footer */}
+          <div className="fixed inset-x-0 bottom-0 z-30 bg-white/85 glass border-t border-slate-100 no-print">
+            <div className="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between gap-3">
+              <div className="text-xs font-bold text-slate-500">
+                ※「更新」でFirestoreから読み込み（オフライン時はキャッシュ表示）
+              </div>
+              <div className="text-xs font-bold text-slate-400">
+                共通ID：{SHARED_LOGIN_CODE}
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    /**********************
+     * Login
+     **********************/
+    function LoginButton({busy, onLogin}){
+      const [open, setOpen] = useState(false);
+      const [pw, setPw] = useState("");
+
+      return (
+        <>
+          <button
+            className={classNames("rounded-2xl px-3 py-2 font-black border shadow-sm",
+              busy ? "bg-slate-100 text-slate-400 border-slate-200" : "bg-white text-slate-700 border-slate-200")}
+            onClick={()=>setOpen(true)}
+            disabled={busy}
+            title="編集する場合はログイン"
+          >
+            ログイン
+          </button>
+
+          <Modal open={open} onClose={()=>setOpen(false)} title="編集モードにログイン（共通ID方式）">
+            <div className="space-y-3">
+              <div className="rounded-3xl bg-slate-50 border border-slate-100 p-4">
+                <div className="text-xs font-black text-slate-500">共通ID</div>
+                <div className="text-xl font-black text-slate-800 mt-1">ismkaikan</div>
+                <div className="text-xs font-bold text-slate-400 mt-1">※IDは固定。パスワードのみ入力します。</div>
+              </div>
+
+              <div className="space-y-2">
+                <div className="text-sm font-black text-slate-700">パスワード</div>
+                <input
+                  type="password"
+                  className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 font-bold text-slate-700"
+                  value={pw}
+                  onChange={(e)=>setPw(e.target.value)}
+                  placeholder="Firebaseで作成したPW"
+                />
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  className="w-full rounded-2xl px-4 py-3 font-black bg-emerald-600 text-white border border-emerald-600 shadow-sm"
+                  onClick={()=>{ onLogin(pw); setOpen(false); setPw(""); }}
+                >
+                  ログインして編集する
+                </button>
+                <button
+                  className="rounded-2xl px-4 py-3 font-black bg-white border border-slate-200 text-slate-700"
+                  onClick={()=>{ setOpen(false); setPw(""); }}
+                >
+                  やめる
+                </button>
+              </div>
+
+              <div className="text-xs font-bold text-slate-400">
+                ※Firebase Authenticationに「ismkaikan@shared.local」を作成しておく必要があります。
+              </div>
+            </div>
+          </Modal>
+        </>
+      );
+    }
+
+    /**********************
+     * Reservation Editor
+     **********************/
+    function ReservationEditor({model, setModel, rooms, opts10, onSave, onCancel, busy, isLoggedIn}){
+      const roomGroups = useMemo(() => {
+        const g = { "本館": [], "別館": [] };
+        for(const r of rooms){
+          if(!g[r.building]) g[r.building] = [];
+          g[r.building].push(r);
+        }
+        return g;
+      }, [rooms]);
+
+      function setField(k,v){
+        setModel(prev => ({ ...prev, [k]: v }));
+      }
+      function setEquip(k,v){
+        const n = Math.max(0, Math.min(999, Number(v)||0));
+        setModel(prev => ({ ...prev, equipment: { ...(prev.equipment||{}), [k]: n }}));
+      }
+
+      // 終了時刻の選択肢：開始+10以上
+      const endOpts = opts10.filter(o => o.value >= (Number(model.startMin)||0) + 10);
+
+      return (
+        <div className="space-y-4">
+          {!isLoggedIn ? (
+            <div className="p-4 rounded-3xl bg-amber-50 border border-amber-100 text-amber-800 font-bold">
+              編集するにはログインしてください（閲覧モードでは保存できません）
+            </div>
+          ) : null}
+
+          <div className="grid md:grid-cols-2 gap-3">
+            <div>
+              <div className="text-sm font-black text-slate-700 mb-2">日付</div>
+              <input
+                type="date"
+                className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 font-bold text-slate-700"
+                value={model.date}
+                onChange={(e)=>setField("date", e.target.value)}
+              />
+            </div>
+
+            <div>
+              <div className="text-sm font-black text-slate-700 mb-2">部屋</div>
+              <select
+                className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 font-bold text-slate-700"
+                value={model.roomId}
+                onChange={(e)=>setField("roomId", e.target.value)}
+              >
+                {Object.keys(roomGroups).map(b => (
+                  <optgroup key={b} label={b}>
+                    {roomGroups[b].map(r => (
+                      <option key={r.id} value={r.id}>{r.name}</option>
+                    ))}
+                  </optgroup>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div className="grid md:grid-cols-2 gap-3">
+            <div>
+              <div className="text-sm font-black text-slate-700 mb-2">開始（10分単位）</div>
+              <select
+                className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 font-bold text-slate-700"
+                value={model.startMin}
+                onChange={(e)=>{
+                  const s = Number(e.target.value);
+                  const eMin = Number(model.endMin)||0;
+                  setField("startMin", s);
+                  if(eMin <= s) setField("endMin", s+10);
+                }}
+              >
+                {opts10.map(o => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <div className="text-sm font-black text-slate-700 mb-2">終了（開始＋10分以上）</div>
+              <select
+                className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 font-bold text-slate-700"
+                value={model.endMin}
+                onChange={(e)=>setField("endMin", Number(e.target.value))}
+              >
+                {endOpts.map(o => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div>
+            <div className="text-sm font-black text-slate-700 mb-2">団体名（必須）</div>
+            <input
+              className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 font-bold text-slate-700"
+              value={model.groupName}
+              onChange={(e)=>setField("groupName", e.target.value)}
+              placeholder="例：○○研究会、△△クラブ など"
+            />
+          </div>
+
+          <div className="grid md:grid-cols-2 gap-3">
+            <div className="rounded-3xl border border-slate-100 bg-slate-50 p-4">
+              <div className="font-black text-slate-800">機材</div>
+              <div className="mt-3 space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="font-bold text-slate-700">プロジェクター</div>
+                  <input
+                    type="number" min="0" max="999"
+                    className="w-24 text-right rounded-2xl border border-slate-200 bg-white px-3 py-2 font-black text-slate-700"
+                    value={model?.equipment?.projector ?? 0}
+                    onChange={(e)=>setEquip("projector", e.target.value)}
+                  />
+                </div>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="font-bold text-slate-700">PC</div>
+                  <input
+                    type="number" min="0" max="999"
+                    className="w-24 text-right rounded-2xl border border-slate-200 bg-white px-3 py-2 font-black text-slate-700"
+                    value={model?.equipment?.pc ?? 0}
+                    onChange={(e)=>setEquip("pc", e.target.value)}
+                  />
+                </div>
+                <div className="text-xs font-bold text-slate-400">
+                  ※保存前に「同時間帯で総数超過」を警告します
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-3xl border border-slate-100 bg-slate-50 p-4">
+              <div className="font-black text-slate-800">メモ（任意）</div>
+              <textarea
+                className="mt-3 w-full h-28 rounded-2xl border border-slate-200 bg-white px-3 py-2 font-bold text-slate-700"
+                value={model.note}
+                onChange={(e)=>setField("note", e.target.value)}
+                placeholder="例：机配置、来館時間の目安、鍵の受け渡し など"
+              />
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              className={classNames("w-full rounded-2xl px-4 py-3 font-black shadow-sm border",
+                (!isLoggedIn || busy) ? "bg-slate-100 text-slate-400 border-slate-200" : "bg-emerald-600 text-white border-emerald-600")}
+              disabled={!isLoggedIn || busy}
+              onClick={()=>onSave(model)}
+            >
+              保存
+            </button>
+            <button
+              className="rounded-2xl px-4 py-3 font-black bg-white border border-slate-200 text-slate-700"
+              onClick={onCancel}
+            >
+              キャンセル
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    /**********************
+     * Presence
+     **********************/
+    function PresenceMini({label, data}){
+      const d = data || {};
+      const f = (x)=> x ? x : "—";
+      return (
+        <div className="rounded-2xl bg-white border border-slate-100 p-3">
+          <div className="text-xs font-black text-slate-500">{label}</div>
+          <div className="mt-1 text-xs font-bold text-slate-700">
+            午前：{f(d.am)} ／ 午後：{f(d.pm)} ／ 夕方：{f(d.eve)}
+          </div>
+        </div>
+      );
+    }
+
+    function PresenceEditor({title, value, onSet, disabled}){
+      const states = [
+        { key:"在館" },
+        { key:"外出" },
+        { key:"会議" },
+        { key:"休" },
+      ];
+      const slots = [
+        { id:"am", label:"午前" },
+        { id:"pm", label:"午後" },
+        { id:"eve", label:"夕方" },
+      ];
+      const v = value || {};
+
+      return (
+        <div className="rounded-3xl border border-slate-100 bg-white p-4">
+          <div className="font-black text-slate-800">{title}</div>
+          <div className="mt-3 space-y-3">
+            {slots.map(s => (
+              <div key={s.id} className="rounded-3xl bg-slate-50 border border-slate-100 p-3">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <div className="font-black text-slate-700">{s.label}</div>
+                  <Pill tone="slate">現在：{v[s.id] || "—"}</Pill>
+                </div>
+                <div className="mt-2 flex gap-2 flex-wrap">
+                  {states.map(st => (
+                    <button
+                      key={st.key}
+                      disabled={disabled}
+                      onClick={()=>onSet(s.id, st.key)}
+                      className={classNames(
+                        "px-3 py-2 rounded-2xl border font-black shadow-sm",
+                        (v[s.id]===st.key)
+                          ? "bg-slate-900 text-white border-slate-900"
+                          : "bg-white text-slate-700 border-slate-200",
+                        disabled ? "opacity-50" : ""
+                      )}
+                    >
+                      {st.key}
+                    </button>
+                  ))}
+                  <button
+                    disabled={disabled}
+                    onClick={()=>onSet(s.id, "")}
+                    className={classNames(
+                      "px-3 py-2 rounded-2xl border font-black shadow-sm bg-white text-slate-500 border-slate-200",
+                      disabled ? "opacity-50" : ""
+                    )}
+                    title="未設定に戻す"
+                  >
+                    クリア
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="mt-2 text-xs font-bold text-slate-400">※ワンタップで保存（ログイン時のみ）</div>
+        </div>
+      );
+    }
+
+    /**********************
+     * CSV Panels
+     **********************/
+    function CSVExportPanel({ selectedDate, weekStart, weekEnd, reserveView, onExport, busy }){
+      const [mode, setMode] = useState(reserveView==="week" ? "week" : "day"); // day | week | range
+      const [start, setStart] = useState(weekStart);
+      const [end, setEnd] = useState(weekEnd);
+
+      useEffect(() => {
+        if(reserveView==="week"){
+          setMode("week");
+          setStart(weekStart); setEnd(weekEnd);
+        }else{
+          setMode("day");
+          setStart(selectedDate); setEnd(selectedDate);
+        }
+      }, [reserveView, selectedDate, weekStart, weekEnd]);
+
+      function run(){
+        if(mode==="day") onExport(selectedDate, selectedDate);
+        else if(mode==="week") onExport(weekStart, weekEnd);
+        else onExport(start, end);
+      }
+
+      return (
+        <div className="mt-3 space-y-3">
+          <div className="flex gap-2 flex-wrap">
+            <button
+              className={classNames("px-4 py-2 rounded-2xl font-black border",
+                mode==="day" ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-700 border-slate-200")}
+              onClick={()=>setMode("day")}
+            >
+              日（{selectedDate}）
+            </button>
+            <button
+              className={classNames("px-4 py-2 rounded-2xl font-black border",
+                mode==="week" ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-700 border-slate-200")}
+              onClick={()=>setMode("week")}
+            >
+              週（{weekStart}〜{weekEnd}）
+            </button>
+            <button
+              className={classNames("px-4 py-2 rounded-2xl font-black border",
+                mode==="range" ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-700 border-slate-200")}
+              onClick={()=>setMode("range")}
+            >
+              範囲指定
+            </button>
+          </div>
+
+          {mode==="range" ? (
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <div className="text-xs font-black text-slate-600 mb-1">開始</div>
+                <input type="date" className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 font-bold"
+                  value={start} onChange={(e)=>setStart(e.target.value)}
+                />
+              </div>
+              <div>
+                <div className="text-xs font-black text-slate-600 mb-1">終了</div>
+                <input type="date" className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 font-bold"
+                  value={end} onChange={(e)=>setEnd(e.target.value)}
+                />
+              </div>
+            </div>
+          ) : null}
+
+          <button
+            className={classNames("w-full px-4 py-3 rounded-2xl font-black border shadow-sm",
+              busy ? "bg-slate-100 text-slate-400 border-slate-200" : "bg-emerald-600 text-white border-emerald-600")}
+            onClick={run}
+            disabled={busy}
+          >
+            CSVを書き出す
+          </button>
+        </div>
+      );
+    }
+
+    function CSVImportPanel({ disabled, onImport }){
+      const fileRef = useRef(null);
+
+      return (
+        <div className="mt-3 space-y-3">
+          <input
+            ref={fileRef}
+            type="file"
+            accept=".csv,text/csv"
+            className="block w-full text-sm"
+            disabled={disabled}
+          />
+          <button
+            className={classNames("w-full px-4 py-3 rounded-2xl font-black border shadow-sm",
+              disabled ? "bg-slate-100 text-slate-400 border-slate-200" : "bg-sky-600 text-white border-sky-600")}
+            disabled={disabled}
+            onClick={()=>{
+              const f = fileRef.current?.files?.[0];
+              if(!f){ alert("CSVファイルを選択してください"); return; }
+              onImport(f);
+              fileRef.current.value = "";
+            }}
+          >
+            CSVを取り込む（安全モード）
+          </button>
+        </div>
+      );
+    }
+
+    // Render
+    ReactDOM.createRoot(document.getElementById("app")).render(<App />);
+  </script>
+</body>
+</html>
