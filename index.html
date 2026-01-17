@@ -22,6 +22,13 @@
     body { -webkit-tap-highlight-color: transparent; }
     .glass { backdrop-filter: blur(10px); }
 
+    /* ===== ふわっと登場 ===== */
+    @keyframes fadeUp {
+      0% { transform: translateY(8px); opacity: 0; }
+      100% { transform: translateY(0); opacity: 1; }
+    }
+    .fadeUp { animation: fadeUp .35s ease-out both; }
+
     /* ===== 印刷（A4横） ===== */
     @media print {
       @page { size: A4 landscape; margin: 10mm; }
@@ -32,13 +39,24 @@
       .print-card { break-inside: avoid; page-break-inside: avoid; }
       .print-tight { font-size: 11px; }
       .print-table td, .print-table th { padding: 6px !important; }
+      .print-head { margin-bottom: 8px; }
+      .print-head h1 { font-size: 16px; font-weight: 900; margin: 0; }
+      .print-head .meta { font-size: 11px; font-weight: 700; color: #334155; margin-top: 2px; }
     }
     .print-only { display: none; }
     .print-area { display: none; }
+
+    /* 背景の雰囲気（“使いたくなる”） */
+    .bg-hero {
+      background:
+        radial-gradient(1200px 600px at 20% -10%, rgba(56,189,248,.20), transparent 60%),
+        radial-gradient(900px 500px at 95% 10%, rgba(16,185,129,.16), transparent 55%),
+        radial-gradient(900px 600px at 10% 110%, rgba(244,63,94,.10), transparent 55%);
+    }
   </style>
 </head>
 
-<body class="bg-slate-50 text-slate-800">
+<body class="bg-slate-50 text-slate-800 bg-hero">
   <div id="app"></div>
 
   <script type="text/babel">
@@ -49,29 +67,29 @@
      **********************/
     const SHARED_LOGIN_CODE = "ismkaikan";
     const SHARED_EMAIL = `${SHARED_LOGIN_CODE}@shared.local`; // Firebase Authはメール形式が必要
-    const CACHE_PREFIX = "ismkaikan_cache_v2";
+    const CACHE_PREFIX = "ismkaikan_cache_v3";
     const OPS_KEY = "ismkaikan_ops_v1"; // read/write概算（月単位で保存）
 
     /**********************
- * Firebase 初期化
- **********************/
-// ▼▼▼ 必ず差し替え（Firebase ConsoleのWebアプリ設定） ▼▼▼
-const firebaseConfig = {
-  apiKey: "AIzaSyAfO6ZAOlAZg-yG8ja3fR3U-zEnqMwmpw8",
-  authDomain: "ism2711-49523.firebaseapp.com",
-  projectId: "ism2711-49523",
-  storageBucket: "ism2711-49523.firebasestorage.app",
-  messagingSenderId: "44334771941",
-  appId: "1:44334771941:web:a55badc93b3f6bdf59ee0c",
-  measurementId: "G-M4SWCYYH82"
-};
-// ▲▲▲ ここまで ▲▲▲
+     * Firebase 初期化
+     **********************/
+    // ▼▼▼ 必ず差し替え（Firebase ConsoleのWebアプリ設定） ▼▼▼
+    const firebaseConfig = {
+      apiKey: "AIzaSyAfO6ZAOlAZg-yG8ja3fR3U-zEnqMwmpw8",
+      authDomain: "ism2711-49523.firebaseapp.com",
+      projectId: "ism2711-49523",
+      storageBucket: "ism2711-49523.firebasestorage.app",
+      messagingSenderId: "44334771941",
+      appId: "1:44334771941:web:a55badc93b3f6bdf59ee0c",
+      measurementId: "G-M4SWCYYH82"
+    };
+    // ▲▲▲ ここまで ▲▲▲
 
-// compat（window.firebase）で初期化
-firebase.initializeApp(firebaseConfig);
-const auth = firebase.auth();
-const db = firebase.firestore();
-const serverTimestamp = firebase.firestore.FieldValue.serverTimestamp;
+    // compat（window.firebase）で初期化
+    firebase.initializeApp(firebaseConfig);
+    const auth = firebase.auth();
+    const db = firebase.firestore();
+    const serverTimestamp = firebase.firestore.FieldValue.serverTimestamp;
 
     /**********************
      * マスタ（部屋）
@@ -270,6 +288,21 @@ const serverTimestamp = firebase.firestore.FieldValue.serverTimestamp;
       return ROOMS.find(r=>r.id===roomId)?.building ?? "";
     }
 
+    function yearStartEnd(year){
+      const y = Number(year);
+      return {
+        start: `${y}-01-01`,
+        end: `${y}-12-31`
+      };
+    }
+
+    function fmtDow(key){
+      const dt = parseKeyToDate(key);
+      const d = dt.getDay();
+      const map = ["日","月","火","水","木","金","土"];
+      return map[d] || "";
+    }
+
     /**********************
      * UI部品
      **********************/
@@ -289,7 +322,7 @@ const serverTimestamp = firebase.firestore.FieldValue.serverTimestamp;
     };
 
     const Card = ({children, printCard=false}) => (
-      <div className={classNames("bg-white rounded-3xl p-4 shadow-sm border border-slate-100", printCard ? "print-card" : "")}>
+      <div className={classNames("bg-white/90 rounded-3xl p-4 shadow-sm border border-slate-100", printCard ? "print-card" : "", "fadeUp")}>
         {children}
       </div>
     );
@@ -298,12 +331,12 @@ const serverTimestamp = firebase.firestore.FieldValue.serverTimestamp;
       <div className="flex items-end justify-between gap-2 flex-wrap">
         <div className="space-y-1">
           <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-2xl bg-slate-100 flex items-center justify-center text-slate-600 font-black">
+            <div className="w-9 h-9 rounded-2xl bg-slate-900 text-white flex items-center justify-center font-black shadow-sm">
               {icon}
             </div>
             <div className="text-lg font-black text-slate-800">{title}</div>
           </div>
-          {sub ? <div className="text-xs font-bold text-slate-400">{sub}</div> : null}
+          {sub ? <div className="text-xs font-bold text-slate-500">{sub}</div> : null}
         </div>
         {right ? <div className="flex items-center gap-2">{right}</div> : null}
       </div>
@@ -315,7 +348,7 @@ const serverTimestamp = firebase.firestore.FieldValue.serverTimestamp;
         <div className="fixed inset-0 z-50 no-print">
           <div className="absolute inset-0 bg-black/30" onClick={onClose}></div>
           <div className="absolute inset-x-0 bottom-0 md:inset-0 md:flex md:items-center md:justify-center p-3">
-            <div className="w-full md:max-w-2xl bg-white rounded-3xl shadow-xl border border-slate-100 overflow-hidden">
+            <div className="w-full md:max-w-3xl bg-white rounded-3xl shadow-xl border border-slate-100 overflow-hidden">
               <div className="p-4 border-b border-slate-100 flex items-center justify-between">
                 <div className="font-black text-slate-800">{title}</div>
                 <button className="px-3 py-2 rounded-2xl bg-slate-100 font-black text-slate-700" onClick={onClose}>閉じる</button>
@@ -329,16 +362,17 @@ const serverTimestamp = firebase.firestore.FieldValue.serverTimestamp;
       );
     };
 
-    function TabButton({active, onClick, children}){
+    function TabButton({active, onClick, icon, children}){
       return (
         <button
           onClick={onClick}
           className={classNames(
-            "rounded-2xl py-3 font-black border shadow-sm",
-            active ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-700 border-slate-200"
+            "rounded-2xl py-3 font-black border shadow-sm flex items-center justify-center gap-2",
+            active ? "bg-slate-900 text-white border-slate-900" : "bg-white/90 text-slate-700 border-slate-200"
           )}
         >
-          {children}
+          <span className="text-base">{icon}</span>
+          <span>{children}</span>
         </button>
       );
     }
@@ -381,16 +415,23 @@ const serverTimestamp = firebase.firestore.FieldValue.serverTimestamp;
       const [busy, setBusy] = useState(false);
       const [toast, setToast] = useState(null);
 
-      const [reservations, setReservations] = useState([]);     // 選択日
-      const [weekReservations, setWeekReservations] = useState([]); // 週表示用（週範囲）
+      const [reservations, setReservations] = useState([]);         // 選択日
+      const [weekReservations, setWeekReservations] = useState([]); // 週表示用
+      const [yearReservations, setYearReservations] = useState([]); // 年表示用
       const [presence, setPresence] = useState(null);
       const [equipments, setEquipments] = useState(DEFAULT_EQUIPMENTS);
 
       const [editorOpen, setEditorOpen] = useState(false);
       const [editTarget, setEditTarget] = useState(null);
 
-      const [reserveView, setReserveView] = useState("day"); // day | week
+      const [reserveView, setReserveView] = useState("day"); // day | week | year
       const [csvOpen, setCsvOpen] = useState(false);
+
+      // 検索
+      const [searchOpen, setSearchOpen] = useState(false);
+      const [searchQuery, setSearchQuery] = useState("");
+      const [searchResults, setSearchResults] = useState([]);
+      const [searchMeta, setSearchMeta] = useState(null);
 
       const [ops, setOps] = useState(loadOps()); // read/write概算
 
@@ -400,6 +441,9 @@ const serverTimestamp = firebase.firestore.FieldValue.serverTimestamp;
       const weekStart = useMemo(() => startOfWeekMonday(selectedDate), [selectedDate]);
       const weekKeys = useMemo(() => Array.from({length:7}, (_,i)=>addDaysKey(weekStart, i)), [weekStart]);
       const weekEnd = weekKeys[6];
+
+      const currentYear = useMemo(() => Number(selectedDate.slice(0,4)), [selectedDate]);
+      const [yearPick, setYearPick] = useState(Number(todayKeyLocal().slice(0,4)));
 
       // equipments map
       const equipmentsMap = useMemo(() => {
@@ -423,17 +467,20 @@ const serverTimestamp = firebase.firestore.FieldValue.serverTimestamp;
         const pKey = `${CACHE_PREFIX}:presence:${selectedDate}`;
         const eKey = `${CACHE_PREFIX}:equipments`;
         const wKey = `${CACHE_PREFIX}:weekReservations:${weekStart}`;
+        const yKey = `${CACHE_PREFIX}:yearReservations:${yearPick}`;
 
         const cr = loadCache(rKey);
         const cp = loadCache(pKey);
         const ce = loadCache(eKey);
         const cw = loadCache(wKey);
+        const cy = loadCache(yKey);
 
         if(cr) setReservations(cr);
         if(cp) setPresence(cp);
         if(ce) setEquipments(ce);
         if(cw) setWeekReservations(cw);
-      }, [selectedDate, weekStart]);
+        if(cy) setYearReservations(cy);
+      }, [selectedDate, weekStart, yearPick]);
 
       // ops永続化
       useEffect(() => { saveOps(ops); }, [ops]);
@@ -473,7 +520,7 @@ const serverTimestamp = firebase.firestore.FieldValue.serverTimestamp;
           setReservations(rs);
           saveCache(`${CACHE_PREFIX}:reservations:${selectedDate}`, rs);
 
-          // presence（選択日）: 1 read（存在しなくてもgetは読み相当として扱う）
+          // presence（選択日）: 1 read扱い
           const pDoc = await db.collection("presence").doc(selectedDate).get();
           bumpReads(1);
 
@@ -493,9 +540,12 @@ const serverTimestamp = firebase.firestore.FieldValue.serverTimestamp;
             setEquipments(DEFAULT_EQUIPMENTS);
           }
 
-          // 週表示用（reserveViewがweekなら週範囲も更新）
+          // 週/年表示中なら、その範囲も更新
           if(reserveView === "week"){
             await refreshWeek();
+          }
+          if(reserveView === "year"){
+            await refreshYear(yearPick);
           }
 
           setToast({ type:"ok", msg:"更新しました" });
@@ -509,7 +559,6 @@ const serverTimestamp = firebase.firestore.FieldValue.serverTimestamp;
       }
 
       async function refreshWeek(){
-        // weekStart〜weekEnd の予約をまとめて取得（dateに範囲クエリ）
         const wSnap = await db.collection("reservations")
           .where("date", ">=", weekStart)
           .where("date", "<=", weekEnd)
@@ -526,12 +575,29 @@ const serverTimestamp = firebase.firestore.FieldValue.serverTimestamp;
         saveCache(`${CACHE_PREFIX}:weekReservations:${weekStart}`, wr);
       }
 
+      async function refreshYear(year){
+        const { start, end } = yearStartEnd(year);
+        const ySnap = await db.collection("reservations")
+          .where("date", ">=", start)
+          .where("date", "<=", end)
+          .get();
+        bumpReads(ySnap.size);
+
+        const yr = ySnap.docs.map(d => ({ id: d.id, ...d.data() }))
+          .sort((a,b) =>
+            (a.date||"").localeCompare(b.date||"")
+            || (a.roomId||"").localeCompare(b.roomId||"")
+            || (a.startMin||0)-(b.startMin||0)
+          );
+        setYearReservations(yr);
+        saveCache(`${CACHE_PREFIX}:yearReservations:${year}`, yr);
+      }
+
       // 共通IDログイン
       async function loginWithShared(password){
         setBusy(true);
         try{
           await auth.signInWithEmailAndPassword(SHARED_EMAIL, password);
-          // authログイン自体はread/writeに含めない（School Calの考え方に合わせて「Firestoreの概算」扱い）
           setToast({ type:"ok", msg:"ログインしました（編集できます）" });
         }catch(err){
           console.error(err);
@@ -610,8 +676,8 @@ const serverTimestamp = firebase.firestore.FieldValue.serverTimestamp;
           return;
         }
 
-        // 同日の予約（状態から）
         const sameDate = getReservationsForDate(model.date);
+
         // 1) 部屋の重複チェック
         const sameRoom = sameDate.filter(x => x.roomId===model.roomId && x.id !== model.id);
         const conflict = sameRoom.some(x => overlaps(sMin, eMin, x.startMin||0, x.endMin||0));
@@ -688,11 +754,7 @@ const serverTimestamp = firebase.firestore.FieldValue.serverTimestamp;
           setEditorOpen(false);
           setEditTarget(null);
 
-          // 保存後：選択日/週の表示を崩さないよう更新
           await refreshAll();
-          if(reserveView === "week"){
-            await refreshWeek();
-          }
         }catch(err){
           console.error(err);
           setToast({ type:"ng", msg:"保存に失敗しました" });
@@ -710,9 +772,6 @@ const serverTimestamp = firebase.firestore.FieldValue.serverTimestamp;
           await db.collection("reservations").doc(id).delete();
           bumpWrites(1);
           await refreshAll();
-          if(reserveView === "week"){
-            await refreshWeek();
-          }
         }catch(err){
           console.error(err);
           setToast({ type:"ng", msg:"削除に失敗しました" });
@@ -773,9 +832,10 @@ const serverTimestamp = firebase.firestore.FieldValue.serverTimestamp;
               willWrite++;
             }
           }
-          await batch.commit();
-          bumpWrites(willWrite);
-
+          if(willWrite > 0){
+            await batch.commit();
+            bumpWrites(willWrite);
+          }
           await refreshAll();
           setToast({ type:"ok", msg:"機材マスタを作成しました" });
           setTimeout(()=>setToast(null), 2200);
@@ -832,9 +892,25 @@ const serverTimestamp = firebase.firestore.FieldValue.serverTimestamp;
         return map;
       }, [weekReservations, weekKeys]);
 
-      // 印刷：reserveViewに応じて表示するprintAreaを切替
+      // 年表示（一覧を月ごとに）
+      const yearGrouped = useMemo(() => {
+        const g = {};
+        for(let m=1; m<=12; m++){
+          g[m] = [];
+        }
+        for(const r of yearReservations || []){
+          const mm = Number((r.date||"").slice(5,7));
+          if(!g[mm]) g[mm] = [];
+          g[mm].push(r);
+        }
+        for(const m of Object.keys(g)){
+          g[m].sort((a,b)=>(a.date||"").localeCompare(b.date||"") || (a.startMin||0)-(b.startMin||0) || (a.roomId||"").localeCompare(b.roomId||""));
+        }
+        return g;
+      }, [yearReservations]);
+
+      // 印刷
       function doPrint(){
-        // 印刷前に最低限の整合：週表示なら週データを持っておく（任意）
         window.print();
       }
 
@@ -902,7 +978,7 @@ const serverTimestamp = firebase.firestore.FieldValue.serverTimestamp;
         }
       }
 
-      // CSV：インポート（追加方式：重複はスキップ or 指定IDがあれば更新）
+      // CSV：インポート（安全モード：重複/機材超過はスキップ）
       async function importCSV(file){
         if(!isLoggedIn){
           alert("インポートはログイン後に行ってください");
@@ -930,13 +1006,11 @@ const serverTimestamp = firebase.firestore.FieldValue.serverTimestamp;
         const i_pc = idx("pc");
         const i_note = idx("note");
 
-        // 必須最低限
         if(i_date < 0 || (i_roomId < 0 && i_roomName < 0) || i_start < 0 || i_end < 0 || i_group < 0){
           alert("CSVのヘッダが不足しています。\n必須: date, roomId(またはroomName), start, end, groupName");
           return;
         }
 
-        // row -> model
         const parsed = [];
         const errors = [];
 
@@ -977,7 +1051,6 @@ const serverTimestamp = firebase.firestore.FieldValue.serverTimestamp;
           }
 
           if(!roomId){
-            // roomName + building から推定
             const cand = ROOMS.filter(x => x.name === roomNameVal && (!buildingVal || x.building === buildingVal));
             if(cand.length === 1) roomId = cand[0].id;
           }
@@ -1005,7 +1078,6 @@ const serverTimestamp = firebase.firestore.FieldValue.serverTimestamp;
 
         if(errors.length){
           alert("CSVにエラーがあります。先頭のみ表示します。\n\n" + errors.slice(0, 10).join("\n"));
-          // エラーがあっても、正しい行だけ取り込む運用もあるが、事故防止で一旦止める
           return;
         }
         if(parsed.length === 0){
@@ -1013,7 +1085,6 @@ const serverTimestamp = firebase.firestore.FieldValue.serverTimestamp;
           return;
         }
 
-        // 取り込み対象の日付範囲をまとめて取得して、重複チェックに使う
         const dates = Array.from(new Set(parsed.map(x=>x.date))).sort();
         const rangeStart = dates[0];
         const rangeEnd = dates[dates.length-1];
@@ -1028,23 +1099,22 @@ const serverTimestamp = firebase.firestore.FieldValue.serverTimestamp;
 
           const existing = snap.docs.map(d => ({ id: d.id, ...d.data() }));
 
-          // map by date
           const byDate = {};
           for(const r of existing){
             if(!byDate[r.date]) byDate[r.date] = [];
             byDate[r.date].push(r);
           }
 
-          // 追加/更新判定 + 予約重複チェック（部屋重複はスキップ）
           let addCount = 0;
           let updateCount = 0;
           let skipCount = 0;
 
-          // batch書き込み（最大400件/バッチ安全）
-          const toWrite = [];
+          const toSet = [];
+          const toAdd = [];
 
           for(const m of parsed){
             const sameDate = byDate[m.date] || [];
+
             // 部屋重複（同一部屋）
             const sameRoom = sameDate.filter(x => x.roomId === m.roomId && x.id !== m.id);
             const conflict = sameRoom.some(x => overlaps(m.startMin, m.endMin, x.startMin||0, x.endMin||0));
@@ -1053,7 +1123,7 @@ const serverTimestamp = firebase.firestore.FieldValue.serverTimestamp;
               continue;
             }
 
-            // 機材超過チェックは「警告」だが、インポートは大量なので、超過はスキップ扱いにする（事故防止）
+            // 機材超過（大量インポートなので安全にスキップ）
             const overlapsAny = sameDate.filter(x => x.id !== m.id).filter(x => overlaps(m.startMin, m.endMin, x.startMin||0, x.endMin||0));
             const used = { projector: 0, pc: 0 };
             for(const r of overlapsAny){
@@ -1088,52 +1158,43 @@ const serverTimestamp = firebase.firestore.FieldValue.serverTimestamp;
             };
 
             if(m.id){
-              // 更新（idがFirestoreのidと一致する想定）
-              toWrite.push({ type:"set", id: m.id, payload });
+              toSet.push({ id: m.id, payload });
               updateCount++;
             }else{
-              toWrite.push({ type:"add", payload });
+              toAdd.push({ payload });
               addCount++;
             }
 
-            // 以降の重複判定に反映（仮反映）
+            // 仮反映（後続の重複判定のため）
             if(!byDate[m.date]) byDate[m.date] = [];
             byDate[m.date].push({ ...payload, id: m.id || ("(new_"+Math.random().toString(16).slice(2)+")") });
           }
 
-          // 書き込み実行（batch chunk）
-          let totalWrites = 0;
-          let cursor = 0;
-          while(cursor < toWrite.length){
-            const chunk = toWrite.slice(cursor, cursor + 400);
+          // set（更新）はバッチで（最大400）
+          let wrote = 0;
+          for(let i=0; i<toSet.length; i+=400){
+            const chunk = toSet.slice(i, i+400);
             const batch = db.batch();
-
             for(const item of chunk){
-              if(item.type === "set"){
-                const ref = db.collection("reservations").doc(item.id);
-                batch.set(ref, item.payload, { merge:true });
-                totalWrites += 1;
-              }else{
-                // addはbatchにできないので、ここは個別で（compat制約回避）
-              }
+              const ref = db.collection("reservations").doc(item.id);
+              batch.set(ref, item.payload, { merge:true });
             }
-
-            // add（個別）
-            // ※ addは書き込み回数が多いが、失敗しにくい。必要なら将来doc ID生成してbatch setへ拡張可。
-            await batch.commit();
-            cursor += 400;
+            if(chunk.length){
+              await batch.commit();
+              wrote += chunk.length;
+            }
           }
 
-          // add分を個別実行
-          for(const item of toWrite.filter(x=>x.type==="add")){
+          // add（追加）は個別
+          for(const item of toAdd){
             await db.collection("reservations").add({ ...item.payload, createdAt: serverTimestamp() });
-            totalWrites += 1;
+            wrote += 1;
           }
-          bumpWrites(totalWrites);
+
+          bumpWrites(wrote);
 
           alert(`CSVインポート完了\n追加: ${addCount}\n更新: ${updateCount}\nスキップ(重複/機材超過): ${skipCount}`);
           await refreshAll();
-          if(reserveView === "week") await refreshWeek();
         }catch(err){
           console.error(err);
           alert("インポートに失敗しました");
@@ -1142,31 +1203,92 @@ const serverTimestamp = firebase.firestore.FieldValue.serverTimestamp;
         }
       }
 
-      // 週表示に切り替えたとき、週データが空なら更新を促す（自動で取るとreadが増えるので維持）
-      useEffect(() => {
-        if(tab === "reserve" && reserveView === "week"){
-          // キャッシュが無い/古い可能性があるので、未取得なら軽く誘導
-          // （自動取得したければここで refreshWeek を呼べます）
-        }
-      }, [tab, reserveView]);
+      /**********************
+       * 検索（School Cal風：年をまたいで探せる）
+       **********************/
+      async function runSearch(params){
+        const { start, end, keyword, building, roomId, needPJ, needPC } = params;
 
-      // 週表示：セル用の表示（短く）
+        if(!isValidDateKey(start) || !isValidDateKey(end) || end < start){
+          alert("検索範囲の日付が正しくありません");
+          return;
+        }
+
+        setBusy(true);
+        try{
+          const snap = await db.collection("reservations")
+            .where("date", ">=", start)
+            .where("date", "<=", end)
+            .get();
+          bumpReads(snap.size);
+
+          const list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+          const kw = (keyword || "").trim().toLowerCase();
+          const hits = list.filter(r => {
+            if(building && roomBuilding(r.roomId) !== building) return false;
+            if(roomId && r.roomId !== roomId) return false;
+
+            if(needPJ && Number(r?.equipment?.projector ?? 0) <= 0) return false;
+            if(needPC && Number(r?.equipment?.pc ?? 0) <= 0) return false;
+
+            if(!kw) return true;
+
+            const hay = [
+              r.groupName || "",
+              r.note || "",
+              r.roomId || "",
+              roomName(r.roomId),
+              roomBuilding(r.roomId),
+              r.date || "",
+              minToHHMM(r.startMin||0),
+              minToHHMM(r.endMin||0),
+            ].join(" ").toLowerCase();
+
+            return hay.includes(kw);
+          }).sort((a,b)=>(a.date||"").localeCompare(b.date||"") || (a.startMin||0)-(b.startMin||0) || (a.roomId||"").localeCompare(b.roomId||""));
+
+          setSearchResults(hits);
+          setSearchMeta({ ...params, fetched: list.length, hits: hits.length });
+
+          setToast({ type:"ok", msg:`検索完了：${hits.length}件` });
+          setTimeout(()=>setToast(null), 1800);
+        }catch(err){
+          console.error(err);
+          alert("検索に失敗しました（Firestore設定/ルールを確認）");
+        }finally{
+          setBusy(false);
+        }
+      }
+
+      /**********************
+       * 表示：共通
+       **********************/
       function cellText(r){
         return `${minToHHMM(r.startMin||0)}-${minToHHMM(r.endMin||0)} ${r.groupName||""}`;
       }
+
+      const printTitle = useMemo(() => {
+        if(tab !== "reserve") return `日付：${selectedDate}`;
+        if(reserveView === "day") return `日付：${selectedDate}`;
+        if(reserveView === "week") return `週：${weekStart}（${fmtDow(weekStart)}）〜${weekEnd}（${fmtDow(weekEnd)}）`;
+        if(reserveView === "year") return `年：${yearPick}年（${yearReservations.length}件）`;
+        return "";
+      }, [tab, reserveView, selectedDate, weekStart, weekEnd, yearPick, yearReservations]);
 
       return (
         <div className="max-w-6xl mx-auto p-4 space-y-4 pb-28">
 
           {/* ===== ヘッダー（印刷では非表示） ===== */}
-          <div className="sticky top-0 z-40 -mx-4 px-4 py-3 bg-slate-50/80 glass border-b border-slate-100 no-print">
+          <div className="sticky top-0 z-40 -mx-4 px-4 py-3 bg-white/70 glass border-b border-slate-100 no-print">
             <div className="flex items-center justify-between gap-3 flex-wrap">
               <div className="space-y-0.5">
                 <div className="text-xs font-black text-slate-500">夷隅教育会館</div>
-                <div className="text-lg font-black text-slate-800">管理アプリ（部屋予約・機材・動静）</div>
+                <div className="text-lg font-black text-slate-900">管理アプリ</div>
+                <div className="text-xs font-bold text-slate-500">部屋予約・機材・動静（10分単位）</div>
               </div>
 
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <input
                   type="date"
                   className="rounded-2xl border border-slate-200 bg-white px-3 py-2 font-bold text-slate-700"
@@ -1182,6 +1304,17 @@ const serverTimestamp = firebase.firestore.FieldValue.serverTimestamp;
                   title="Firestoreから読み込み"
                 >
                   更新
+                </button>
+
+                <button
+                  className={classNames(
+                    "rounded-2xl px-4 py-2 font-black border shadow-sm",
+                    "bg-white/90 border-slate-200 text-slate-700"
+                  )}
+                  onClick={()=>setSearchOpen(true)}
+                  title="期間・キーワードで検索（翌年以降もOK）"
+                >
+                  検索
                 </button>
 
                 {isLoggedIn ? (
@@ -1201,7 +1334,6 @@ const serverTimestamp = firebase.firestore.FieldValue.serverTimestamp;
                 {isLoggedIn ? "編集モード（ログイン中）" : "閲覧モード（ログインなし）"}
               </Pill>
               <Pill tone="sky">共通ID：{SHARED_LOGIN_CODE}</Pill>
-              <Pill tone="slate">予約単位：10分</Pill>
               <Pill tone="amber">概算 reads：{ops.reads}</Pill>
               <Pill tone="amber">概算 writes：{ops.writes}</Pill>
               <button
@@ -1213,14 +1345,37 @@ const serverTimestamp = firebase.firestore.FieldValue.serverTimestamp;
               </button>
               {busy ? <Pill tone="amber">処理中…</Pill> : null}
             </div>
+
+            {/* クイック検索（入力→Enterで検索モーダルへ） */}
+            <div className="mt-3 flex gap-2 items-center flex-wrap">
+              <div className="flex-1 min-w-[260px]">
+                <input
+                  className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 font-bold text-slate-700"
+                  placeholder="クイック検索：団体名/メモ/部屋（Enterで検索）"
+                  value={searchQuery}
+                  onChange={(e)=>setSearchQuery(e.target.value)}
+                  onKeyDown={(e)=>{
+                    if(e.key === "Enter"){
+                      setSearchOpen(true);
+                    }
+                  }}
+                />
+              </div>
+              <button
+                className="rounded-2xl px-4 py-2 font-black bg-slate-900 text-white border border-slate-900 shadow-sm"
+                onClick={()=>setSearchOpen(true)}
+              >
+                条件を開く
+              </button>
+            </div>
           </div>
 
           {/* Tabs */}
-          <div className="grid grid-cols-4 gap-2 no-print">
-            <TabButton active={tab==="home"} onClick={()=>setTab("home")}>全体</TabButton>
-            <TabButton active={tab==="reserve"} onClick={()=>setTab("reserve")}>部屋予約</TabButton>
-            <TabButton active={tab==="equip"} onClick={()=>setTab("equip")}>機材</TabButton>
-            <TabButton active={tab==="presence"} onClick={()=>setTab("presence")}>動静</TabButton>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2 no-print">
+            <TabButton icon="🏠" active={tab==="home"} onClick={()=>setTab("home")}>全体</TabButton>
+            <TabButton icon="📅" active={tab==="reserve"} onClick={()=>setTab("reserve")}>部屋予約</TabButton>
+            <TabButton icon="🧰" active={tab==="equip"} onClick={()=>setTab("equip")}>機材</TabButton>
+            <TabButton icon="🟢" active={tab==="presence"} onClick={()=>setTab("presence")}>動静</TabButton>
           </div>
 
           {/* ===== 全体 ===== */}
@@ -1230,7 +1385,7 @@ const serverTimestamp = firebase.firestore.FieldValue.serverTimestamp;
                 <SectionTitle
                   icon="🏠"
                   title="今日の状況"
-                  sub="まずはここだけ見ればOK"
+                  sub="まずはここだけ見ればOK（更新 → 最新表示）"
                   right={
                     isLoggedIn ? (
                       <button
@@ -1245,25 +1400,25 @@ const serverTimestamp = firebase.firestore.FieldValue.serverTimestamp;
                 <div className="mt-4 grid md:grid-cols-3 gap-3">
                   <div className="rounded-3xl border border-slate-100 bg-slate-50 p-4">
                     <div className="text-xs font-black text-slate-500">部屋予約（件数）</div>
-                    <div className="text-3xl font-black text-slate-800 mt-1">{reservations.length}</div>
-                    <div className="text-xs font-bold text-slate-400 mt-2">日付：{selectedDate}</div>
+                    <div className="text-3xl font-black text-slate-900 mt-1">{reservations.length}</div>
+                    <div className="text-xs font-bold text-slate-500 mt-2">日付：{selectedDate}</div>
                   </div>
 
                   <div className="rounded-3xl border border-slate-100 bg-slate-50 p-4 space-y-2">
                     <div className="text-xs font-black text-slate-500">機材使用（合計）</div>
                     <div className="flex items-center justify-between">
-                      <div className="font-black text-slate-800">プロジェクター</div>
-                      <div className="font-black text-slate-800">
+                      <div className="font-black text-slate-900">プロジェクター</div>
+                      <div className="font-black text-slate-900">
                         {equipmentUsed.projector} / {equipmentsMap.projector?.countTotal ?? "—"}
                       </div>
                     </div>
                     <div className="flex items-center justify-between">
-                      <div className="font-black text-slate-800">PC</div>
-                      <div className="font-black text-slate-800">
+                      <div className="font-black text-slate-900">PC</div>
+                      <div className="font-black text-slate-900">
                         {equipmentUsed.pc} / {equipmentsMap.pc?.countTotal ?? "—"}
                       </div>
                     </div>
-                    <div className="text-xs font-bold text-slate-400">※予約に紐づく「使用台数」の合計</div>
+                    <div className="text-xs font-bold text-slate-500">※予約に紐づく「使用台数」の合計</div>
                   </div>
 
                   <div className="rounded-3xl border border-slate-100 bg-slate-50 p-4">
@@ -1275,15 +1430,15 @@ const serverTimestamp = firebase.firestore.FieldValue.serverTimestamp;
                   </div>
                 </div>
 
-                <div className="mt-4 text-sm font-black text-slate-700">部屋ごとの予約（{selectedDate}）</div>
+                <div className="mt-5 text-sm font-black text-slate-800">部屋ごとの予約（{selectedDate}）</div>
 
                 <div className="mt-3 grid md:grid-cols-2 gap-3">
                   {ROOMS.map(room => (
-                    <div key={room.id} className="rounded-3xl border border-slate-100 p-4">
+                    <div key={room.id} className="rounded-3xl border border-slate-100 bg-white p-4">
                       <div className="flex items-center justify-between">
                         <div className="space-y-0.5">
-                          <div className="text-xs font-black text-slate-400">{room.building}</div>
-                          <div className="font-black text-slate-800">{room.name}</div>
+                          <div className="text-xs font-black text-slate-500">{room.building}</div>
+                          <div className="font-black text-slate-900">{room.name}</div>
                         </div>
                         <Pill tone="slate">{(byRoom[room.id]||[]).length}件</Pill>
                       </div>
@@ -1295,13 +1450,13 @@ const serverTimestamp = firebase.firestore.FieldValue.serverTimestamp;
                           (byRoom[room.id]||[]).map(r => (
                             <div key={r.id} className="flex items-start justify-between gap-2 p-3 rounded-2xl bg-slate-50 border border-slate-100">
                               <div className="min-w-0">
-                                <div className="font-black text-slate-800">
+                                <div className="font-black text-slate-900">
                                   {minToHHMM(r.startMin||0)}–{minToHHMM(r.endMin||0)} / {r.groupName}
                                 </div>
-                                <div className="text-xs font-bold text-slate-500 mt-1 flex gap-2 flex-wrap">
+                                <div className="text-xs font-bold text-slate-600 mt-1 flex gap-2 flex-wrap">
                                   {(Number(r?.equipment?.projector||0)>0) && <Pill tone="sky">PJ {r.equipment.projector}</Pill>}
                                   {(Number(r?.equipment?.pc||0)>0) && <Pill tone="sky">PC {r.equipment.pc}</Pill>}
-                                  {r.note ? <Pill tone="slate">メモ</Pill> : null}
+                                  {r.note ? <Pill tone="slate">メモあり</Pill> : null}
                                 </div>
                               </div>
 
@@ -1332,7 +1487,13 @@ const serverTimestamp = firebase.firestore.FieldValue.serverTimestamp;
                 <SectionTitle
                   icon="📅"
                   title="部屋予約"
-                  sub={reserveView==="day" ? "日表示（選択中の日付）" : `週表示（${weekStart}〜${weekEnd}）`}
+                  sub={
+                    reserveView==="day"
+                      ? "日表示（選択中の日付）"
+                      : reserveView==="week"
+                        ? `週表示（${weekStart}〜${weekEnd}）`
+                        : `年表示（${yearPick}年：翌年以降もOK）`
+                  }
                   right={
                     <div className="flex items-center gap-2 flex-wrap no-print">
                       <button
@@ -1340,21 +1501,34 @@ const serverTimestamp = firebase.firestore.FieldValue.serverTimestamp;
                           reserveView==="day" ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-700 border-slate-200")}
                         onClick={()=>setReserveView("day")}
                       >
-                        日表示
+                        日
                       </button>
                       <button
                         className={classNames("px-4 py-2 rounded-2xl font-black border shadow-sm",
                           reserveView==="week" ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-700 border-slate-200")}
                         onClick={async ()=>{
                           setReserveView("week");
-                          // 切替時に週データを持っていなければ軽く取得（更新ボタン方式を尊重しつつ、ここだけ自動）
                           if((weekReservations||[]).length===0){
                             setBusy(true);
                             try{ await refreshWeek(); } finally { setBusy(false); }
                           }
                         }}
                       >
-                        週表示
+                        週
+                      </button>
+                      <button
+                        className={classNames("px-4 py-2 rounded-2xl font-black border shadow-sm",
+                          reserveView==="year" ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-700 border-slate-200")}
+                        onClick={async ()=>{
+                          setReserveView("year");
+                          if((yearReservations||[]).length===0 || yearPick !== currentYear){
+                            setBusy(true);
+                            try{ await refreshYear(yearPick); } finally { setBusy(false); }
+                          }
+                        }}
+                        title="翌年以降も入れていく用（年の一覧）"
+                      >
+                        年
                       </button>
 
                       {isLoggedIn ? (
@@ -1384,6 +1558,34 @@ const serverTimestamp = firebase.firestore.FieldValue.serverTimestamp;
                   }
                 />
 
+                {/* 年表示：年ピッカー */}
+                {reserveView==="year" ? (
+                  <div className="mt-4 flex items-center gap-2 flex-wrap no-print">
+                    <div className="font-black text-slate-700">年</div>
+                    <input
+                      type="number"
+                      min="2020"
+                      max="2100"
+                      className="w-28 rounded-2xl border border-slate-200 bg-white px-3 py-2 font-black text-slate-700"
+                      value={yearPick}
+                      onChange={(e)=>setYearPick(Number(e.target.value||0))}
+                    />
+                    <button
+                      className={classNames("px-4 py-2 rounded-2xl font-black border shadow-sm",
+                        busy ? "bg-slate-100 text-slate-400 border-slate-200" : "bg-sky-600 text-white border-sky-600")}
+                      onClick={async ()=>{
+                        setBusy(true);
+                        try{ await refreshYear(yearPick); } finally { setBusy(false); }
+                      }}
+                      disabled={busy}
+                      title="年の予約を読み込み"
+                    >
+                      この年を更新
+                    </button>
+                    <Pill tone="slate">件数：{yearReservations.length}</Pill>
+                  </div>
+                ) : null}
+
                 {/* 日表示 */}
                 {reserveView==="day" && (
                   <div className="mt-4 space-y-2">
@@ -1396,13 +1598,13 @@ const serverTimestamp = firebase.firestore.FieldValue.serverTimestamp;
                         <div key={r.id} className="p-4 rounded-3xl border border-slate-100 bg-white">
                           <div className="flex items-start justify-between gap-3 flex-wrap">
                             <div className="space-y-1 min-w-0">
-                              <div className="text-xs font-black text-slate-400">
+                              <div className="text-xs font-black text-slate-500">
                                 {roomBuilding(r.roomId)} / {roomName(r.roomId)}
                               </div>
-                              <div className="text-base font-black text-slate-800">
+                              <div className="text-base font-black text-slate-900">
                                 {minToHHMM(r.startMin||0)}–{minToHHMM(r.endMin||0)}　{r.groupName}
                               </div>
-                              <div className="text-xs font-bold text-slate-500 flex gap-2 flex-wrap">
+                              <div className="text-xs font-bold text-slate-600 flex gap-2 flex-wrap">
                                 {(Number(r?.equipment?.projector||0)>0) && <Pill tone="sky">PJ {r.equipment.projector}</Pill>}
                                 {(Number(r?.equipment?.pc||0)>0) && <Pill tone="sky">PC {r.equipment.pc}</Pill>}
                                 {r.note ? <Pill tone="slate">{r.note}</Pill> : <span className="text-slate-400">メモなし</span>}
@@ -1437,8 +1639,9 @@ const serverTimestamp = firebase.firestore.FieldValue.serverTimestamp;
                         <tr>
                           <th className="text-left text-xs font-black text-slate-500 px-3 py-2">部屋</th>
                           {weekKeys.map(d => (
-                            <th key={d} className="text-left text-xs font-black text-slate-600 px-3 py-2 bg-slate-50 border border-slate-100 rounded-2xl">
+                            <th key={d} className="text-left text-xs font-black text-slate-700 px-3 py-2 bg-slate-50 border border-slate-100 rounded-2xl">
                               <div className="font-black">{d}</div>
+                              <div className="text-[11px] font-bold text-slate-500">（{fmtDow(d)}）</div>
                             </th>
                           ))}
                         </tr>
@@ -1447,8 +1650,8 @@ const serverTimestamp = firebase.firestore.FieldValue.serverTimestamp;
                         {ROOMS.map(room => (
                           <tr key={room.id}>
                             <td className="align-top px-3 py-3 bg-white border border-slate-100 rounded-2xl">
-                              <div className="text-[11px] font-black text-slate-400">{room.building}</div>
-                              <div className="font-black text-slate-800">{room.name}</div>
+                              <div className="text-[11px] font-black text-slate-500">{room.building}</div>
+                              <div className="font-black text-slate-900">{room.name}</div>
                             </td>
                             {weekKeys.map(d => {
                               const list = (weekMap[d]?.[room.id] || []);
@@ -1460,12 +1663,13 @@ const serverTimestamp = firebase.firestore.FieldValue.serverTimestamp;
                                     <div className="space-y-2">
                                       {list.map(r => (
                                         <div key={r.id} className="p-2 rounded-2xl bg-slate-50 border border-slate-100">
-                                          <div className="font-black text-slate-800 text-xs">
+                                          <div className="font-black text-slate-900 text-xs">
                                             {cellText(r)}
                                           </div>
-                                          <div className="mt-1 flex gap-1 flex-wrap">
+                                          <div className="mt-1 flex gap-2 flex-wrap">
                                             {(Number(r?.equipment?.projector||0)>0) && <span className="text-[10px] font-black text-sky-700">PJ{r.equipment.projector}</span>}
                                             {(Number(r?.equipment?.pc||0)>0) && <span className="text-[10px] font-black text-sky-700">PC{r.equipment.pc}</span>}
+                                            {r.note ? <span className="text-[10px] font-black text-slate-500">メモ</span> : null}
                                           </div>
                                           {isLoggedIn ? (
                                             <div className="mt-2 flex gap-2 no-print">
@@ -1487,18 +1691,87 @@ const serverTimestamp = firebase.firestore.FieldValue.serverTimestamp;
                         ))}
                       </tbody>
                     </table>
-                    <div className="mt-3 text-xs font-bold text-slate-400 no-print">
-                      ※週表示の内容は「週表示に切替」または「更新」で読み込み（概算readに反映されます）
+                    <div className="mt-3 text-xs font-bold text-slate-500 no-print">
+                      ※週表示の内容は「週へ切替」時に読み込み（概算readに反映）／必要なら「更新」で最新に
+                    </div>
+                  </div>
+                )}
+
+                {/* 年表示（一覧：月ごと） */}
+                {reserveView==="year" && (
+                  <div className="mt-4 space-y-3">
+                    <div className="text-xs font-bold text-slate-600">
+                      ※年表示は「この年を更新」で読み込み（翌年以降を入れていく運用向け）
+                    </div>
+
+                    <div className="grid md:grid-cols-3 gap-3">
+                      {Array.from({length:12}, (_,i)=>i+1).map(m => (
+                        <div key={m} className="rounded-3xl border border-slate-100 bg-white p-4">
+                          <div className="flex items-center justify-between">
+                            <div className="font-black text-slate-900">{m}月</div>
+                            <Pill tone="slate">{(yearGrouped[m]||[]).length}件</Pill>
+                          </div>
+
+                          <div className="mt-3 space-y-2 max-h-64 overflow-auto pr-1">
+                            {(yearGrouped[m]||[]).length===0 ? (
+                              <div className="text-xs font-bold text-slate-400">—</div>
+                            ) : (
+                              (yearGrouped[m]||[]).slice(0, 50).map(r => (
+                                <div key={r.id} className="p-2 rounded-2xl bg-slate-50 border border-slate-100">
+                                  <div className="text-xs font-black text-slate-700">
+                                    {r.date} {minToHHMM(r.startMin||0)}–{minToHHMM(r.endMin||0)}
+                                  </div>
+                                  <div className="text-xs font-black text-slate-900 mt-0.5">
+                                    {roomName(r.roomId)} / {r.groupName}
+                                  </div>
+                                  <div className="mt-1 text-[10px] font-bold text-slate-600 flex gap-2 flex-wrap">
+                                    {(Number(r?.equipment?.projector||0)>0) && <span className="font-black text-sky-700">PJ{r.equipment.projector}</span>}
+                                    {(Number(r?.equipment?.pc||0)>0) && <span className="font-black text-sky-700">PC{r.equipment.pc}</span>}
+                                    {r.note ? <span className="font-black text-slate-500">メモ</span> : null}
+                                  </div>
+
+                                  <div className="mt-2 flex gap-2 no-print">
+                                    <button
+                                      className="px-3 py-1.5 rounded-2xl bg-white border border-slate-200 font-black text-xs text-slate-700"
+                                      onClick={()=>{
+                                        setSelectedDate(r.date);
+                                        setReserveView("day");
+                                      }}
+                                      title="その日に移動"
+                                    >
+                                      移動
+                                    </button>
+                                    {isLoggedIn ? (
+                                      <button
+                                        className="px-3 py-1.5 rounded-2xl bg-white border border-slate-200 font-black text-xs text-slate-700"
+                                        onClick={()=>openEdit(r)}
+                                      >
+                                        編集
+                                      </button>
+                                    ) : null}
+                                  </div>
+                                </div>
+                              ))
+                            )}
+                          </div>
+
+                          {(yearGrouped[m]||[]).length > 50 ? (
+                            <div className="mt-2 text-[10px] font-bold text-slate-500">
+                              ※表示は先頭50件まで（検索で全件可）
+                            </div>
+                          ) : null}
+                        </div>
+                      ))}
                     </div>
                   </div>
                 )}
               </Card>
 
-              {/* 印刷用（画面の週/日表示に近い形で出す） */}
+              {/* 印刷用ヘッダ */}
               <div className="print-area">
-                <div className="text-lg font-black">夷隅教育会館 予約表</div>
-                <div className="text-sm font-bold text-slate-600">
-                  {reserveView==="day" ? `日付：${selectedDate}` : `週：${weekStart}〜${weekEnd}`}
+                <div className="print-head">
+                  <h1>夷隅教育会館 予約表</h1>
+                  <div className="meta">{printTitle}</div>
                 </div>
               </div>
             </div>
@@ -1510,7 +1783,7 @@ const serverTimestamp = firebase.firestore.FieldValue.serverTimestamp;
               <Card printCard>
                 <SectionTitle icon="🧰" title="機材" sub="総数（マスタ）と、予約に紐づく使用数を管理" />
                 <div className="mt-4 flex items-center justify-between flex-wrap gap-2">
-                  <div className="text-sm font-black text-slate-700">機材マスタ</div>
+                  <div className="text-sm font-black text-slate-800">機材マスタ</div>
                   {isLoggedIn ? (
                     <button className="rounded-2xl px-4 py-2 font-black bg-white border border-slate-200 text-slate-700 no-print"
                       onClick={seedEquipments}
@@ -1526,22 +1799,22 @@ const serverTimestamp = firebase.firestore.FieldValue.serverTimestamp;
                   {(equipments || []).map(e => (
                     <div key={e.id} className="p-4 rounded-3xl border border-slate-100 bg-slate-50">
                       <div className="flex items-center justify-between gap-2">
-                        <div className="font-black text-slate-800">{e.name}</div>
+                        <div className="font-black text-slate-900">{e.name}</div>
                         <Pill tone="slate">総数：{e.countTotal ?? "—"}</Pill>
                       </div>
-                      <div className="mt-2 text-xs font-bold text-slate-500">
-                        ※総数変更UIは必要なら追加できます（今はMVP）
+                      <div className="mt-2 text-xs font-bold text-slate-600">
+                        ※総数変更UIは必要なら追加できます（まずは運用が回る最小構成）
                       </div>
                     </div>
                   ))}
                 </div>
 
                 <div className="mt-4 rounded-3xl border border-slate-100 bg-white p-4">
-                  <div className="font-black text-slate-800">この日の使用合計（予約から集計）</div>
+                  <div className="font-black text-slate-900">この日の使用合計（予約から集計）</div>
                   <div className="mt-2 text-sm font-bold text-slate-700">
                     プロジェクター：{equipmentUsed.projector} ／ PC：{equipmentUsed.pc}
                   </div>
-                  <div className="mt-1 text-xs font-bold text-slate-400">
+                  <div className="mt-1 text-xs font-bold text-slate-500">
                     ※同時間帯チェックは「保存時」に動きます（超過すると警告）
                   </div>
                 </div>
@@ -1571,7 +1844,7 @@ const serverTimestamp = firebase.firestore.FieldValue.serverTimestamp;
                 </div>
 
                 {!isLoggedIn ? (
-                  <div className="mt-3 text-xs font-bold text-slate-400">※動静の更新はログイン後</div>
+                  <div className="mt-3 text-xs font-bold text-slate-500">※動静の更新はログイン後</div>
                 ) : null}
               </Card>
             </div>
@@ -1605,9 +1878,9 @@ const serverTimestamp = firebase.firestore.FieldValue.serverTimestamp;
           >
             <div className="space-y-4">
               <div className="rounded-3xl bg-slate-50 border border-slate-100 p-4">
-                <div className="font-black text-slate-800">印刷（A4横）</div>
-                <div className="text-xs font-bold text-slate-500 mt-1">
-                  画面の「日表示/週表示」そのまま印刷できます。
+                <div className="font-black text-slate-900">印刷（A4横）</div>
+                <div className="text-xs font-bold text-slate-600 mt-1">
+                  画面の「日/週/年」表示のまま印刷できます。
                 </div>
                 <div className="mt-3 flex gap-2 flex-wrap">
                   <button
@@ -1620,23 +1893,24 @@ const serverTimestamp = firebase.firestore.FieldValue.serverTimestamp;
               </div>
 
               <div className="rounded-3xl bg-slate-50 border border-slate-100 p-4">
-                <div className="font-black text-slate-800">CSV エクスポート（予約）</div>
-                <div className="text-xs font-bold text-slate-500 mt-1">
-                  週表示なら「週の範囲」、日表示なら「その日」をおすすめ。
+                <div className="font-black text-slate-900">CSV エクスポート（予約）</div>
+                <div className="text-xs font-bold text-slate-600 mt-1">
+                  週表示なら「週の範囲」、日表示なら「その日」、年表示なら「1年」をおすすめ。
                 </div>
                 <CSVExportPanel
                   selectedDate={selectedDate}
                   weekStart={weekStart}
                   weekEnd={weekEnd}
                   reserveView={reserveView}
+                  yearPick={yearPick}
                   onExport={exportCSV}
                   busy={busy}
                 />
               </div>
 
               <div className="rounded-3xl bg-slate-50 border border-slate-100 p-4">
-                <div className="font-black text-slate-800">CSV インポート（予約）</div>
-                <div className="text-xs font-bold text-slate-500 mt-1">
+                <div className="font-black text-slate-900">CSV インポート（予約）</div>
+                <div className="text-xs font-bold text-slate-600 mt-1">
                   ※ログインが必要です。重複（同室同時間）/機材超過はスキップして安全に取り込みます。
                 </div>
                 <CSVImportPanel
@@ -1645,10 +1919,40 @@ const serverTimestamp = firebase.firestore.FieldValue.serverTimestamp;
                 />
               </div>
 
-              <div className="text-xs font-bold text-slate-400">
+              <div className="text-xs font-bold text-slate-500">
                 CSVヘッダ例：id,date,building,roomId,roomName,start,end,groupName,projector,pc,note
               </div>
             </div>
+          </Modal>
+
+          {/* ===== 検索モーダル ===== */}
+          <Modal
+            open={searchOpen}
+            onClose={()=>setSearchOpen(false)}
+            title="検索（年をまたいで探せます）"
+          >
+            <SearchPanel
+              busy={busy}
+              initialKeyword={searchQuery}
+              onSearch={runSearch}
+              results={searchResults}
+              meta={searchMeta}
+              rooms={ROOMS}
+              onJump={(r)=>{
+                setSelectedDate(r.date);
+                setTab("reserve");
+                setReserveView("day");
+                setSearchOpen(false);
+              }}
+              onEdit={(r)=>{
+                setTab("reserve");
+                setReserveView("day");
+                setSelectedDate(r.date);
+                setSearchOpen(false);
+                setTimeout(()=>openEdit(r), 150);
+              }}
+              canEdit={isLoggedIn}
+            />
           </Modal>
 
           {/* ===== Toast ===== */}
@@ -1662,12 +1966,12 @@ const serverTimestamp = firebase.firestore.FieldValue.serverTimestamp;
           ) : null}
 
           {/* Footer */}
-          <div className="fixed inset-x-0 bottom-0 z-30 bg-white/85 glass border-t border-slate-100 no-print">
+          <div className="fixed inset-x-0 bottom-0 z-30 bg-white/80 glass border-t border-slate-100 no-print">
             <div className="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between gap-3">
-              <div className="text-xs font-bold text-slate-500">
+              <div className="text-xs font-bold text-slate-600">
                 ※「更新」でFirestoreから読み込み（オフライン時はキャッシュ表示）
               </div>
-              <div className="text-xs font-bold text-slate-400">
+              <div className="text-xs font-bold text-slate-500">
                 共通ID：{SHARED_LOGIN_CODE}
               </div>
             </div>
@@ -1699,8 +2003,8 @@ const serverTimestamp = firebase.firestore.FieldValue.serverTimestamp;
             <div className="space-y-3">
               <div className="rounded-3xl bg-slate-50 border border-slate-100 p-4">
                 <div className="text-xs font-black text-slate-500">共通ID</div>
-                <div className="text-xl font-black text-slate-800 mt-1">ismkaikan</div>
-                <div className="text-xs font-bold text-slate-400 mt-1">※IDは固定。パスワードのみ入力します。</div>
+                <div className="text-xl font-black text-slate-900 mt-1">ismkaikan</div>
+                <div className="text-xs font-bold text-slate-500 mt-1">※IDは固定。パスワードのみ入力します。</div>
               </div>
 
               <div className="space-y-2">
@@ -1729,7 +2033,7 @@ const serverTimestamp = firebase.firestore.FieldValue.serverTimestamp;
                 </button>
               </div>
 
-              <div className="text-xs font-bold text-slate-400">
+              <div className="text-xs font-bold text-slate-500">
                 ※Firebase Authenticationに「ismkaikan@shared.local」を作成しておく必要があります。
               </div>
             </div>
@@ -1759,7 +2063,6 @@ const serverTimestamp = firebase.firestore.FieldValue.serverTimestamp;
         setModel(prev => ({ ...prev, equipment: { ...(prev.equipment||{}), [k]: n }}));
       }
 
-      // 終了時刻の選択肢：開始+10以上
       const endOpts = opts10.filter(o => o.value >= (Number(model.startMin)||0) + 10);
 
       return (
@@ -1844,7 +2147,7 @@ const serverTimestamp = firebase.firestore.FieldValue.serverTimestamp;
 
           <div className="grid md:grid-cols-2 gap-3">
             <div className="rounded-3xl border border-slate-100 bg-slate-50 p-4">
-              <div className="font-black text-slate-800">機材</div>
+              <div className="font-black text-slate-900">機材</div>
               <div className="mt-3 space-y-3">
                 <div className="flex items-center justify-between gap-2">
                   <div className="font-bold text-slate-700">プロジェクター</div>
@@ -1864,14 +2167,14 @@ const serverTimestamp = firebase.firestore.FieldValue.serverTimestamp;
                     onChange={(e)=>setEquip("pc", e.target.value)}
                   />
                 </div>
-                <div className="text-xs font-bold text-slate-400">
+                <div className="text-xs font-bold text-slate-600">
                   ※保存前に「同時間帯で総数超過」を警告します
                 </div>
               </div>
             </div>
 
             <div className="rounded-3xl border border-slate-100 bg-slate-50 p-4">
-              <div className="font-black text-slate-800">メモ（任意）</div>
+              <div className="font-black text-slate-900">メモ（任意）</div>
               <textarea
                 className="mt-3 w-full h-28 rounded-2xl border border-slate-200 bg-white px-3 py-2 font-bold text-slate-700"
                 value={model.note}
@@ -1933,7 +2236,7 @@ const serverTimestamp = firebase.firestore.FieldValue.serverTimestamp;
 
       return (
         <div className="rounded-3xl border border-slate-100 bg-white p-4">
-          <div className="font-black text-slate-800">{title}</div>
+          <div className="font-black text-slate-900">{title}</div>
           <div className="mt-3 space-y-3">
             {slots.map(s => (
               <div key={s.id} className="rounded-3xl bg-slate-50 border border-slate-100 p-3">
@@ -1973,7 +2276,7 @@ const serverTimestamp = firebase.firestore.FieldValue.serverTimestamp;
               </div>
             ))}
           </div>
-          <div className="mt-2 text-xs font-bold text-slate-400">※ワンタップで保存（ログイン時のみ）</div>
+          <div className="mt-2 text-xs font-bold text-slate-500">※ワンタップで保存（ログイン時のみ）</div>
         </div>
       );
     }
@@ -1981,8 +2284,8 @@ const serverTimestamp = firebase.firestore.FieldValue.serverTimestamp;
     /**********************
      * CSV Panels
      **********************/
-    function CSVExportPanel({ selectedDate, weekStart, weekEnd, reserveView, onExport, busy }){
-      const [mode, setMode] = useState(reserveView==="week" ? "week" : "day"); // day | week | range
+    function CSVExportPanel({ selectedDate, weekStart, weekEnd, reserveView, yearPick, onExport, busy }){
+      const [mode, setMode] = useState(reserveView==="week" ? "week" : "day"); // day | week | year | range
       const [start, setStart] = useState(weekStart);
       const [end, setEnd] = useState(weekEnd);
 
@@ -1990,15 +2293,19 @@ const serverTimestamp = firebase.firestore.FieldValue.serverTimestamp;
         if(reserveView==="week"){
           setMode("week");
           setStart(weekStart); setEnd(weekEnd);
+        }else if(reserveView==="year"){
+          setMode("year");
+          setStart(`${yearPick}-01-01`); setEnd(`${yearPick}-12-31`);
         }else{
           setMode("day");
           setStart(selectedDate); setEnd(selectedDate);
         }
-      }, [reserveView, selectedDate, weekStart, weekEnd]);
+      }, [reserveView, selectedDate, weekStart, weekEnd, yearPick]);
 
       function run(){
         if(mode==="day") onExport(selectedDate, selectedDate);
         else if(mode==="week") onExport(weekStart, weekEnd);
+        else if(mode==="year") onExport(`${yearPick}-01-01`, `${yearPick}-12-31`);
         else onExport(start, end);
       }
 
@@ -2018,6 +2325,14 @@ const serverTimestamp = firebase.firestore.FieldValue.serverTimestamp;
               onClick={()=>setMode("week")}
             >
               週（{weekStart}〜{weekEnd}）
+            </button>
+            <button
+              className={classNames("px-4 py-2 rounded-2xl font-black border",
+                mode==="year" ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-700 border-slate-200")}
+              onClick={()=>setMode("year")}
+              title="翌年以降のデータ管理に便利"
+            >
+              年（{yearPick}）
             </button>
             <button
               className={classNames("px-4 py-2 rounded-2xl font-black border",
@@ -2082,6 +2397,160 @@ const serverTimestamp = firebase.firestore.FieldValue.serverTimestamp;
           >
             CSVを取り込む（安全モード）
           </button>
+        </div>
+      );
+    }
+
+    /**********************
+     * Search Panel
+     **********************/
+    function SearchPanel({ busy, initialKeyword, onSearch, results, meta, rooms, onJump, onEdit, canEdit }){
+      const today = todayKeyLocal();
+      const nextYearEnd = `${Number(today.slice(0,4))+1}-12-31`;
+
+      const [start, setStart] = useState(today);
+      const [end, setEnd] = useState(nextYearEnd);
+      const [keyword, setKeyword] = useState(initialKeyword || "");
+      const [building, setBuilding] = useState("");
+      const [roomId, setRoomId] = useState("");
+      const [needPJ, setNeedPJ] = useState(false);
+      const [needPC, setNeedPC] = useState(false);
+
+      useEffect(()=>{ setKeyword(initialKeyword || ""); }, [initialKeyword]);
+
+      function run(){
+        onSearch({ start, end, keyword, building, roomId, needPJ, needPC });
+      }
+
+      return (
+        <div className="space-y-4">
+          <div className="rounded-3xl bg-slate-50 border border-slate-100 p-4 space-y-3">
+            <div className="font-black text-slate-900">検索条件</div>
+
+            <div className="grid md:grid-cols-2 gap-3">
+              <div>
+                <div className="text-xs font-black text-slate-600 mb-1">開始</div>
+                <input type="date" className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 font-bold"
+                  value={start} onChange={(e)=>setStart(e.target.value)}
+                />
+              </div>
+              <div>
+                <div className="text-xs font-black text-slate-600 mb-1">終了</div>
+                <input type="date" className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 font-bold"
+                  value={end} onChange={(e)=>setEnd(e.target.value)}
+                />
+              </div>
+            </div>
+
+            <div className="grid md:grid-cols-2 gap-3">
+              <div>
+                <div className="text-xs font-black text-slate-600 mb-1">キーワード</div>
+                <input className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 font-bold text-slate-700"
+                  value={keyword} onChange={(e)=>setKeyword(e.target.value)}
+                  placeholder="団体名 / メモ / 部屋名 など"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <div className="text-xs font-black text-slate-600 mb-1">建物</div>
+                  <select className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 font-bold text-slate-700"
+                    value={building} onChange={(e)=>setBuilding(e.target.value)}
+                  >
+                    <option value="">指定なし</option>
+                    <option value="本館">本館</option>
+                    <option value="別館">別館</option>
+                  </select>
+                </div>
+                <div>
+                  <div className="text-xs font-black text-slate-600 mb-1">部屋</div>
+                  <select className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 font-bold text-slate-700"
+                    value={roomId} onChange={(e)=>setRoomId(e.target.value)}
+                  >
+                    <option value="">指定なし</option>
+                    {rooms.map(r => <option key={r.id} value={r.id}>{r.building}：{r.name}</option>)}
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-3 flex-wrap">
+              <label className="inline-flex items-center gap-2 font-black text-slate-700">
+                <input type="checkbox" checked={needPJ} onChange={(e)=>setNeedPJ(e.target.checked)} />
+                PJあり
+              </label>
+              <label className="inline-flex items-center gap-2 font-black text-slate-700">
+                <input type="checkbox" checked={needPC} onChange={(e)=>setNeedPC(e.target.checked)} />
+                PCあり
+              </label>
+            </div>
+
+            <button
+              className={classNames("w-full px-4 py-3 rounded-2xl font-black border shadow-sm",
+                busy ? "bg-slate-100 text-slate-400 border-slate-200" : "bg-slate-900 text-white border-slate-900")}
+              onClick={run}
+              disabled={busy}
+            >
+              この条件で検索
+            </button>
+
+            <div className="text-xs font-bold text-slate-500">
+              ※Firestoreは全文検索がないため、まず期間で取得してからキーワード絞り込みします（School Calの考え方と同じ）
+            </div>
+          </div>
+
+          <div className="rounded-3xl bg-white border border-slate-100 p-4">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <div className="font-black text-slate-900">検索結果</div>
+              {meta ? (
+                <Pill tone="slate">取得 {meta.fetched}件 → 該当 {meta.hits}件</Pill>
+              ) : (
+                <Pill tone="slate">未検索</Pill>
+              )}
+            </div>
+
+            <div className="mt-3 space-y-2">
+              {(results || []).length === 0 ? (
+                <div className="text-sm font-bold text-slate-400">結果はここに表示されます</div>
+              ) : (
+                results.slice(0, 200).map(r => (
+                  <div key={r.id} className="p-3 rounded-2xl bg-slate-50 border border-slate-100">
+                    <div className="text-xs font-black text-slate-600">
+                      {r.date} {minToHHMM(r.startMin||0)}–{minToHHMM(r.endMin||0)} / {roomBuilding(r.roomId)}・{roomName(r.roomId)}
+                    </div>
+                    <div className="font-black text-slate-900 mt-1">
+                      {r.groupName}
+                    </div>
+                    <div className="mt-1 text-xs font-bold text-slate-600 flex gap-2 flex-wrap">
+                      {(Number(r?.equipment?.projector||0)>0) && <Pill tone="sky">PJ {r.equipment.projector}</Pill>}
+                      {(Number(r?.equipment?.pc||0)>0) && <Pill tone="sky">PC {r.equipment.pc}</Pill>}
+                      {r.note ? <Pill tone="slate">{r.note}</Pill> : null}
+                    </div>
+
+                    <div className="mt-2 flex gap-2 flex-wrap">
+                      <button
+                        className="px-3 py-2 rounded-2xl bg-white border border-slate-200 font-black text-slate-700"
+                        onClick={()=>onJump(r)}
+                      >
+                        その日に移動
+                      </button>
+                      {canEdit ? (
+                        <button
+                          className="px-3 py-2 rounded-2xl bg-white border border-slate-200 font-black text-slate-700"
+                          onClick={()=>onEdit(r)}
+                        >
+                          編集
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            {(results || []).length > 200 ? (
+              <div className="mt-2 text-xs font-bold text-slate-500">※表示は200件まで（条件を絞ると快適です）</div>
+            ) : null}
+          </div>
         </div>
       );
     }
