@@ -65,16 +65,13 @@ const firebaseConfig = {
   appId: "1:44334771941:web:a55badc93b3f6bdf59ee0c",
   measurementId: "G-M4SWCYYH82"
 };
+// ▲▲▲ ここまで ▲▲▲
 
-// Initialize Firebase
-const app = initializeApp(firebaseConfig);
-const analytics = getAnalytics(app);
-    // ▲▲▲ ここまで ▲▲▲
-
-    firebase.initializeApp(firebaseConfig);
-    const auth = firebase.auth();
-    const db = firebase.firestore();
-    const serverTimestamp = firebase.firestore.FieldValue.serverTimestamp;
+// compat（window.firebase）で初期化
+firebase.initializeApp(firebaseConfig);
+const auth = firebase.auth();
+const db = firebase.firestore();
+const serverTimestamp = firebase.firestore.FieldValue.serverTimestamp;
 
     /**********************
      * マスタ（部屋）
