@@ -1,0 +1,1742 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+  <title>夷隅教育会館 管理（部屋予約・機材・入口モニター）</title>
+
+  <!-- Tailwind -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- React (UMD) + Babel -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <!-- Firebase (CDN / compat) -->
+  <script src="https://www.gstatic.com/firebasejs/12.8.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/12.8.0/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/12.8.0/firebase-firestore-compat.js"></script>
+
+  <style>
+    body { -webkit-tap-highlight-color: transparent; }
+    .glass { backdrop-filter: blur(10px); }
+
+    @media print {
+      @page { size: A4 landscape; margin: 10mm; }
+      body { background: #fff !important; }
+      .no-print { display: none !important; }
+      .print-only { display: block !important; }
+      .print-card { break-inside: avoid; page-break-inside: avoid; }
+      .print-tight { font-size: 11px; }
+    }
+    .print-only { display: none; }
+  </style>
+</head>
+
+<body class="bg-slate-50 text-slate-800">
+  <div id="app"></div>
+
+  <script type="text/babel">
+    const { useEffect, useMemo, useRef, useState } = React;
+
+    /**********************
+     * 固定設定
+     **********************/
+    const SHARED_LOGIN_CODE = "ismkaikan";
+    const SHARED_EMAIL = `${SHARED_LOGIN_CODE}@shared.local`;
+    const CACHE_PREFIX = "ismkaikan_cache_v4";
+    const OPS_KEY = "ismkaikan_ops_v1";
+
+    /**********************
+     * Firebase 初期化（添付ファイルの設定を踏襲）
+     **********************/
+    const firebaseConfig = {
+      apiKey: "AIzaSyAfO6ZAOlAZg-yG8ja3fR3U-zEnqMwmpw8",
+      authDomain: "ism2711-49523.firebaseapp.com",
+      projectId: "ism2711-49523",
+      storageBucket: "ism2711-49523.firebasestorage.app",
+      messagingSenderId: "44334771941",
+      appId: "1:44334771941:web:a55badc93b3f6bdf59ee0c",
+      measurementId: "G-M4SWCYYH82"
+    };
+    firebase.initializeApp(firebaseConfig);
+    const auth = firebase.auth();
+    const db = firebase.firestore();
+    const serverTimestamp = firebase.firestore.FieldValue.serverTimestamp;
+
+    /**********************
+     * 既定（初期フォールバック）
+     * ※Firestoreに rooms / equipments がある前提だが、空のときの保険
+     **********************/
+    const DEFAULT_ROOMS = [
+      { id: "honkan_oo", name: "大会議室", building: "本館", active: true, order: 10 },
+      { id: "honkan_chu", name: "中会議室", building: "本館", active: true, order: 20 },
+      { id: "honkan_sho", name: "小会議室", building: "本館", active: true, order: 30 },
+      { id: "honkan_ousetsu", name: "応接室", building: "本館", active: true, order: 40 },
+      { id: "honkan_nihon", name: "日本間", building: "本館", active: true, order: 50 },
+      { id: "honkan_print", name: "印刷室", building: "本館", active: true, order: 60 },
+      { id: "honkan_library", name: "図書室", building: "本館", active: true, order: 70 },
+      { id: "honkan_lab", name: "研究所", building: "本館", active: true, order: 80 },
+      { id: "bekkan_1f", name: "１階会議室", building: "別館", active: true, order: 110 },
+      { id: "bekkan_2f", name: "２階会議室", building: "別館", active: true, order: 120 },
+    ];
+
+    const DEFAULT_EQUIPMENTS = [
+      { id: "projector", name: "プロジェクター", abbr: "PJ", countTotal: 3, active: true, order: 10 },
+      { id: "pc", name: "PC", abbr: "PC", countTotal: 10, active: true, order: 20 },
+    ];
+
+    /**********************
+     * utils
+     **********************/
+    const pad2 = (n) => String(n).padStart(2, "0");
+    const monthKeyLocal = (d = new Date()) => `${d.getFullYear()}-${pad2(d.getMonth()+1)}`;
+    const todayKeyLocal = (d = new Date()) => `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`;
+    const parseKeyToDate = (key) => {
+      const [y,m,d] = key.split("-").map(Number);
+      return new Date(y, m-1, d);
+    };
+    const addDaysKey = (key, add) => {
+      const dt = parseKeyToDate(key);
+      dt.setDate(dt.getDate()+add);
+      return todayKeyLocal(dt);
+    };
+    const startOfWeekMonday = (key) => {
+      const dt = parseKeyToDate(key);
+      const dow = dt.getDay();
+      const diff = (dow === 0) ? -6 : (1 - dow);
+      dt.setDate(dt.getDate()+diff);
+      return todayKeyLocal(dt);
+    };
+    const hhmmToMin = (hhmm) => {
+      const [h,m] = hhmm.split(":").map(Number);
+      return h*60+m;
+    };
+    const minToHHMM = (min) => `${pad2(Math.floor(min/60))}:${pad2(min%60)}`;
+    const overlaps = (aS,aE,bS,bE) => (aS < bE) && (bS < aE);
+    const isValidDateKey = (k) => /^\d{4}-\d{2}-\d{2}$/.test(k);
+
+    function saveCache(key, value){
+      try{ localStorage.setItem(key, JSON.stringify({ at: Date.now(), value })); }catch(e){}
+    }
+    function loadCache(key){
+      try{
+        const raw = localStorage.getItem(key);
+        if(!raw) return null;
+        const obj = JSON.parse(raw);
+        return obj?.value ?? null;
+      }catch(e){ return null; }
+    }
+
+    function classNames(...xs){ return xs.filter(Boolean).join(" "); }
+
+    /**********************
+     * read/write概算（月単位）
+     **********************/
+    function loadOps(){
+      const mk = monthKeyLocal();
+      try{
+        const raw = localStorage.getItem(OPS_KEY);
+        if(!raw) return { month: mk, reads: 0, writes: 0 };
+        const obj = JSON.parse(raw);
+        if(obj?.month !== mk) return { month: mk, reads: 0, writes: 0 };
+        return { month: mk, reads: Number(obj.reads||0), writes: Number(obj.writes||0) };
+      }catch(e){ return { month: mk, reads: 0, writes: 0 }; }
+    }
+    function saveOps(ops){
+      try{ localStorage.setItem(OPS_KEY, JSON.stringify(ops)); }catch(e){}
+    }
+
+    /**********************
+     * UI primitives
+     **********************/
+    const Pill = ({children, tone="slate"}) => {
+      const map = {
+        slate: "bg-slate-100 text-slate-700 border-slate-200",
+        sky: "bg-sky-50 text-sky-700 border-sky-200",
+        emerald: "bg-emerald-50 text-emerald-700 border-emerald-200",
+        rose: "bg-rose-50 text-rose-700 border-rose-200",
+        amber: "bg-amber-50 text-amber-700 border-amber-200",
+        violet: "bg-violet-50 text-violet-700 border-violet-200",
+      };
+      return (
+        <span className={classNames("inline-flex items-center gap-1 px-2 py-1 rounded-xl text-[12px] font-black border", map[tone]||map.slate)}>
+          {children}
+        </span>
+      );
+    };
+
+    const Card = ({children, printCard=false}) => (
+      <div className={classNames("bg-white rounded-3xl p-4 shadow-sm border border-slate-100", printCard ? "print-card" : "")}>
+        {children}
+      </div>
+    );
+
+    const SectionTitle = ({icon, title, sub, right}) => (
+      <div className="flex items-end justify-between gap-2 flex-wrap">
+        <div className="space-y-1">
+          <div className="flex items-center gap-2">
+            <div className="w-9 h-9 rounded-2xl bg-slate-100 flex items-center justify-center text-slate-700 font-black">
+              {icon}
+            </div>
+            <div className="text-lg font-black text-slate-800">{title}</div>
+          </div>
+          {sub ? <div className="text-xs font-bold text-slate-400">{sub}</div> : null}
+        </div>
+        {right ? <div className="flex items-center gap-2">{right}</div> : null}
+      </div>
+    );
+
+    function TabButton({active, onClick, children}){
+      return (
+        <button
+          onClick={onClick}
+          className={classNames(
+            "rounded-2xl py-3 font-black border shadow-sm",
+            active ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-700 border-slate-200"
+          )}
+        >
+          {children}
+        </button>
+      );
+    }
+
+    const Modal = ({open, onClose, title, children}) => {
+      if(!open) return null;
+      return (
+        <div className="fixed inset-0 z-50 no-print">
+          <div className="absolute inset-0 bg-black/30" onClick={onClose}></div>
+          <div className="absolute inset-x-0 bottom-0 md:inset-0 md:flex md:items-center md:justify-center p-3">
+            <div className="w-full md:max-w-4xl bg-white rounded-3xl shadow-xl border border-slate-100 overflow-hidden">
+              <div className="p-4 border-b border-slate-100 flex items-center justify-between">
+                <div className="font-black text-slate-800">{title}</div>
+                <button className="px-3 py-2 rounded-2xl bg-slate-100 font-black text-slate-700" onClick={onClose}>閉じる</button>
+              </div>
+              <div className="p-4 space-y-4">
+                {children}
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    };
+
+    /**********************
+     * Main App
+     **********************/
+    function App(){
+      const [tab, setTab] = useState("dashboard");
+      const [selectedDate, setSelectedDate] = useState(todayKeyLocal());
+      const [monitorDate, setMonitorDate] = useState(todayKeyLocal());
+
+      const [user, setUser] = useState(null);
+      const [authReady, setAuthReady] = useState(false);
+      const isLoggedIn = !!user;
+
+      const [busy, setBusy] = useState(false);
+      const [toast, setToast] = useState(null);
+
+      const [rooms, setRooms] = useState(DEFAULT_ROOMS);
+      const [equipments, setEquipments] = useState(DEFAULT_EQUIPMENTS);
+
+      const [dayReservations, setDayReservations] = useState([]);
+      const [monitorReservations, setMonitorReservations] = useState([]);
+
+      const [weekStart, setWeekStart] = useState(startOfWeekMonday(selectedDate));
+      const weekKeys = useMemo(()=>Array.from({length:7}, (_,i)=>addDaysKey(weekStart, i)), [weekStart]);
+
+      const [weekReservations, setWeekReservations] = useState([]);
+      const [yearReservations, setYearReservations] = useState([]);
+      const [yearBusy, setYearBusy] = useState(false);
+
+      const [editorOpen, setEditorOpen] = useState(false);
+      const [editModel, setEditModel] = useState(null);
+
+      const [ops, setOps] = useState(loadOps());
+      useEffect(()=>{ saveOps(ops); }, [ops]);
+
+      function bumpReads(n){
+        const mk = monthKeyLocal();
+        setOps(prev => {
+          const base = (prev.month === mk) ? prev : { month: mk, reads: 0, writes: 0 };
+          return { ...base, reads: base.reads + Number(n||0) };
+        });
+      }
+      function bumpWrites(n){
+        const mk = monthKeyLocal();
+        setOps(prev => {
+          const base = (prev.month === mk) ? prev : { month: mk, reads: 0, writes: 0 };
+          return { ...base, writes: base.writes + Number(n||0) };
+        });
+      }
+      function resetOps(){
+        const mk = monthKeyLocal();
+        if(!confirm(`${mk} の read/write（概算）をリセットしますか？`)) return;
+        setOps({ month: mk, reads: 0, writes: 0 });
+      }
+
+      const roomsActive = useMemo(() =>
+        (rooms||[])
+          .filter(r => r.active !== false)
+          .slice()
+          .sort((a,b)=>(Number(a.order||0)-Number(b.order||0)) || String(a.building||"").localeCompare(String(b.building||"")) || String(a.name||"").localeCompare(String(b.name||"")))
+      , [rooms]);
+
+      const roomsMap = useMemo(() => {
+        const m = {};
+        for(const r of rooms||[]) m[r.id] = r;
+        return m;
+      }, [rooms]);
+
+      const equipmentsActive = useMemo(() =>
+        (equipments||[])
+          .filter(e => e.active !== false)
+          .slice()
+          .sort((a,b)=>(Number(a.order||0)-Number(b.order||0)) || String(a.name||"").localeCompare(String(b.name||"")))
+      , [equipments]);
+
+      const equipmentsMap = useMemo(() => {
+        const m = {};
+        for(const e of equipments||[]) m[e.id] = e;
+        return m;
+      }, [equipments]);
+
+      const roomName = (id) => roomsMap[id]?.name ?? id;
+      const roomBuilding = (id) => roomsMap[id]?.building ?? "";
+
+      const blankEquipment = (base={}) => {
+        const out = {};
+        for(const e of equipmentsActive){
+          out[e.id] = Math.max(0, Math.min(999, Number(base?.[e.id] ?? 0) || 0));
+        }
+        return out;
+      };
+
+      const dayEquipmentUsed = useMemo(() => {
+        const used = {};
+        for(const e of equipmentsActive) used[e.id] = 0;
+        for(const r of dayReservations){
+          const eq = r?.equipment || {};
+          for(const e of equipmentsActive){
+            used[e.id] += Number(eq?.[e.id] ?? 0);
+          }
+        }
+        return used;
+      }, [dayReservations, equipmentsActive]);
+
+      // Auth monitor
+      useEffect(() => {
+        const unsub = auth.onAuthStateChanged(u => { setUser(u||null); setAuthReady(true); });
+        return () => unsub && unsub();
+      }, []);
+
+      // Sync weekStart with selectedDate
+      useEffect(() => { setWeekStart(startOfWeekMonday(selectedDate)); }, [selectedDate]);
+
+      // Load caches on mount
+      useEffect(() => {
+        const rCache = loadCache(`${CACHE_PREFIX}:rooms`);
+        const eCache = loadCache(`${CACHE_PREFIX}:equipments`);
+        const dCache = loadCache(`${CACHE_PREFIX}:reservations:${selectedDate}`);
+        const mCache = loadCache(`${CACHE_PREFIX}:monitor:${monitorDate}`);
+        if(rCache?.length) setRooms(rCache);
+        if(eCache?.length) setEquipments(eCache);
+        if(dCache) setDayReservations(dCache);
+        if(mCache) setMonitorReservations(mCache);
+      }, []);
+
+      // When date changes, load cached day reservations
+      useEffect(() => {
+        const dCache = loadCache(`${CACHE_PREFIX}:reservations:${selectedDate}`);
+        if(dCache) setDayReservations(dCache);
+      }, [selectedDate]);
+
+      // When monitor date changes, load cached monitor reservations
+      useEffect(() => {
+        const mCache = loadCache(`${CACHE_PREFIX}:monitor:${monitorDate}`);
+        if(mCache) setMonitorReservations(mCache);
+      }, [monitorDate]);
+
+      async function loginWithShared(password){
+        setBusy(true);
+        try{
+          await auth.signInWithEmailAndPassword(SHARED_EMAIL, password);
+          setToast({ type:"ok", msg:"ログインしました（編集できます）" });
+        }catch(err){
+          console.error(err);
+          setToast({ type:"ng", msg:"ログインできません（PWが違う/ユーザー未作成）" });
+        }finally{
+          setBusy(false);
+          setTimeout(()=>setToast(null), 2600);
+        }
+      }
+      async function logout(){
+        await auth.signOut();
+        setToast({ type:"ok", msg:"ログアウトしました" });
+        setTimeout(()=>setToast(null), 2000);
+      }
+
+      async function refreshMasters(opts = {}){
+        const { silent = false } = (opts || {});
+        setBusy(true);
+        try{
+          // 閲覧モード（未ログイン）では、権限ルール次第で rooms/equipments が読めず失敗しがち。
+          // その場合でも「キャッシュ or 既定値」を読み込み、赤エラーにしない。
+          if(!isLoggedIn){
+            const rCache = loadCache(`${CACHE_PREFIX}:rooms`);
+            const eCache = loadCache(`${CACHE_PREFIX}:equipments`);
+            setRooms((rCache?.length) ? rCache : DEFAULT_ROOMS);
+            setEquipments((eCache?.length) ? eCache : DEFAULT_EQUIPMENTS);
+            if(!silent){
+              setToast({ type:"ok", msg:"マスタを読み込みました（閲覧モード：キャッシュ/既定値）" });
+            }
+            return;
+          }
+
+          const rs = await db.collection("rooms").get();
+          bumpReads(rs.size);
+          const roomsList = rs.docs.map(d => ({ id: d.id, ...d.data() }));
+          const roomsFinal = roomsList.length ? roomsList : DEFAULT_ROOMS;
+          setRooms(roomsFinal);
+          saveCache(`${CACHE_PREFIX}:rooms`, roomsFinal);
+
+          const es = await db.collection("equipments").get();
+          bumpReads(es.size);
+          const eqList = es.docs.map(d => ({ id: d.id, ...d.data() }));
+          const eqFinal = eqList.length ? eqList : DEFAULT_EQUIPMENTS;
+          setEquipments(eqFinal);
+          saveCache(`${CACHE_PREFIX}:equipments`, eqFinal);
+
+          if(!silent){
+            setToast({ type:"ok", msg:"マスタを更新しました" });
+          }
+        }catch(err){
+          console.error(err);
+
+          // サーバー取得に失敗しても、キャッシュ/既定値で継続表示
+          const rCache = loadCache(`${CACHE_PREFIX}:rooms`);
+          const eCache = loadCache(`${CACHE_PREFIX}:equipments`);
+          setRooms((rCache?.length) ? rCache : DEFAULT_ROOMS);
+          setEquipments((eCache?.length) ? eCache : DEFAULT_EQUIPMENTS);
+
+          if(!silent){
+            const code = err?.code || "";
+            const hint = (code === "permission-denied" || code === "unauthenticated")
+              ? "ログインするとサーバーのマスタを更新できます"
+              : "通信/権限の可能性：キャッシュ/既定値を表示しました";
+            setToast({ type:"ok", msg:`マスタを読み込みました（${hint}）` });
+          }
+        }finally{
+          setBusy(false);
+          if(!silent) setTimeout(()=>setToast(null), 2200);
+        }
+      }
+
+      async function refreshDay(dateKey){
+        setBusy(true);
+        try{
+          const snap = await db.collection("reservations").where("date","==",dateKey).get();
+          bumpReads(snap.size);
+          const list = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+            .sort((a,b)=>(String(a.roomId||"").localeCompare(String(b.roomId||"")) || Number(a.startMin||0)-Number(b.startMin||0)));
+          setDayReservations(list);
+          saveCache(`${CACHE_PREFIX}:reservations:${dateKey}`, list);
+          setToast({ type:"ok", msg:"更新しました" });
+        }catch(err){
+          console.error(err);
+          setToast({ type:"ng", msg:"更新に失敗しました" });
+        }finally{
+          setBusy(false);
+          setTimeout(()=>setToast(null), 2000);
+        }
+      }
+
+      async function refreshMonitor(dateKey){
+        setBusy(true);
+        try{
+          const snap = await db.collection("reservations").where("date","==",dateKey).get();
+          bumpReads(snap.size);
+          const list = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+            .sort((a,b)=>(String(a.roomId||"").localeCompare(String(b.roomId||"")) || Number(a.startMin||0)-Number(b.startMin||0)));
+          setMonitorReservations(list);
+          saveCache(`${CACHE_PREFIX}:monitor:${dateKey}`, list);
+          setToast({ type:"ok", msg:"モニターを更新しました" });
+        }catch(err){
+          console.error(err);
+          setToast({ type:"ng", msg:"更新に失敗しました" });
+        }finally{
+          setBusy(false);
+          setTimeout(()=>setToast(null), 2000);
+        }
+      }
+
+      async function refreshWeek(startKey){
+        setBusy(true);
+        try{
+          const endKey = addDaysKey(startKey, 6);
+          const snap = await db.collection("reservations")
+            .where("date", ">=", startKey)
+            .where("date", "<=", endKey)
+            .get();
+          bumpReads(snap.size);
+          const list = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+            .sort((a,b)=>(String(a.date||"").localeCompare(String(b.date||"")) || String(a.roomId||"").localeCompare(String(b.roomId||"")) || Number(a.startMin||0)-Number(b.startMin||0)));
+          setWeekReservations(list);
+          saveCache(`${CACHE_PREFIX}:week:${startKey}`, list);
+          setToast({ type:"ok", msg:"週を更新しました" });
+        }catch(err){
+          console.error(err);
+          setToast({ type:"ng", msg:"週の更新に失敗しました" });
+        }finally{
+          setBusy(false);
+          setTimeout(()=>setToast(null), 2000);
+        }
+      }
+
+      async function refreshYear(){
+        setYearBusy(true);
+        try{
+          // 4月〜翌3月（selectedDate基準の年度）
+          const fy = (()=>{
+            const d = parseKeyToDate(selectedDate);
+            const y = d.getFullYear();
+            const m = d.getMonth()+1;
+            return (m>=4) ? y : (y-1);
+          })();
+          const start = `${fy}-04-01`;
+          const end = `${fy+1}-03-31`;
+
+          const snap = await db.collection("reservations")
+            .where("date", ">=", start)
+            .where("date", "<=", end)
+            .get();
+          bumpReads(snap.size);
+          const list = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+            .sort((a,b)=>(String(a.date||"").localeCompare(String(b.date||"")) || String(a.roomId||"").localeCompare(String(b.roomId||"")) || Number(a.startMin||0)-Number(b.startMin||0)));
+          setYearReservations(list);
+        }catch(err){
+          console.error(err);
+          setToast({ type:"ng", msg:"年度一覧の取得に失敗しました" });
+          setTimeout(()=>setToast(null), 2400);
+        }finally{
+          setYearBusy(false);
+        }
+      }
+
+      function openNew(){
+        const firstRoom = roomsActive[0]?.id || DEFAULT_ROOMS[0].id;
+        setEditModel({
+          id: null,
+          date: selectedDate,
+          roomId: firstRoom,
+          startMin: hhmmToMin("09:00"),
+          endMin: hhmmToMin("10:00"),
+          groupName: "",
+          note: "",
+          equipment: blankEquipment({}),
+        });
+        setEditorOpen(true);
+      }
+
+      function openEdit(r){
+        setEditModel({
+          id: r.id,
+          date: r.date,
+          roomId: r.roomId,
+          startMin: Number(r.startMin||0),
+          endMin: Number(r.endMin||0),
+          groupName: r.groupName || "",
+          note: r.note || "",
+          equipment: blankEquipment(r.equipment || {}),
+        });
+        setEditorOpen(true);
+      }
+
+      async function saveReservation(model){
+        if(!isLoggedIn){
+          setToast({ type:"ng", msg:"編集にはログインが必要です" });
+          setTimeout(()=>setToast(null), 2200);
+          return;
+        }
+        const g = (model.groupName||"").trim();
+        if(!g){
+          setToast({ type:"ng", msg:"団体名は必須です" });
+          setTimeout(()=>setToast(null), 2200);
+          return;
+        }
+        if(!isValidDateKey(model.date)){
+          setToast({ type:"ng", msg:"日付が不正です" });
+          setTimeout(()=>setToast(null), 2200);
+          return;
+        }
+        const sMin = Number(model.startMin);
+        const eMin = Number(model.endMin);
+        if(!(eMin > sMin)){
+          setToast({ type:"ng", msg:"終了時刻は開始時刻より後にしてください" });
+          setTimeout(()=>setToast(null), 2200);
+          return;
+        }
+
+        // 同日データを確実に持つ（キャッシュだけだとズレる可能性があるので、保存前に同日を取得）
+        setBusy(true);
+        try{
+          const sameSnap = await db.collection("reservations").where("date","==",model.date).get();
+          bumpReads(sameSnap.size);
+          const sameDate = sameSnap.docs.map(d => ({ id:d.id, ...d.data() }));
+
+          // 1) 同室重複
+          const sameRoom = sameDate.filter(x => x.roomId === model.roomId && x.id !== model.id);
+          const conflict = sameRoom.some(x => overlaps(sMin,eMin, Number(x.startMin||0), Number(x.endMin||0)));
+          if(conflict){
+            setToast({ type:"ng", msg:"同じ部屋で時間が重複しています（予約不可）" });
+            setTimeout(()=>setToast(null), 2800);
+            return;
+          }
+
+          // 2) 機材超過（同時間帯、全室）
+          const overlapsAny = sameDate
+            .filter(x => x.id !== model.id)
+            .filter(x => overlaps(sMin,eMin, Number(x.startMin||0), Number(x.endMin||0)));
+
+          const need = blankEquipment(model.equipment || {});
+          const used = {};
+          for(const e of equipmentsActive) used[e.id] = 0;
+
+          for(const r of overlapsAny){
+            const eq = r?.equipment || {};
+            for(const e of equipmentsActive){
+              used[e.id] += Number(eq?.[e.id] ?? 0);
+            }
+          }
+
+          const warnings = [];
+          for(const e of equipmentsActive){
+            const total = Number(e.countTotal ?? 0) || 0;
+            const after = used[e.id] + (need[e.id]||0);
+            if(total > 0 && after > total){
+              warnings.push(`${e.name}が総数 ${total} を超えます（同時間帯 合計 ${after}）`);
+            }
+          }
+          if(warnings.length){
+            const ok = confirm(`【機材の警告】\n${warnings.join("\n")}\n\nそれでも保存しますか？`);
+            if(!ok) return;
+          }
+
+          const payload = {
+            date: model.date,
+            roomId: model.roomId,
+            startMin: sMin,
+            endMin: eMin,
+            groupName: g,
+            note: (model.note||"").trim(),
+            equipment: need,
+            updatedAt: serverTimestamp(),
+          };
+
+          if(model.id){
+            await db.collection("reservations").doc(model.id).set(payload, { merge:true });
+            bumpWrites(1);
+          }else{
+            await db.collection("reservations").add({ ...payload, createdAt: serverTimestamp() });
+            bumpWrites(1);
+          }
+
+          setEditorOpen(false);
+          setEditModel(null);
+
+          // 画面に応じて更新
+          await refreshDay(selectedDate);
+          if(tab === "monitor") await refreshMonitor(monitorDate);
+          if(tab === "week") await refreshWeek(weekStart);
+          if(tab === "year") await refreshYear();
+
+          setToast({ type:"ok", msg:"保存しました" });
+          setTimeout(()=>setToast(null), 1500);
+        }catch(err){
+          console.error(err);
+          setToast({ type:"ng", msg:"保存に失敗しました" });
+          setTimeout(()=>setToast(null), 2400);
+        }finally{
+          setBusy(false);
+        }
+      }
+
+      async function deleteReservation(id){
+        if(!isLoggedIn) return;
+        if(!confirm("この予約を削除しますか？")) return;
+        setBusy(true);
+        try{
+          await db.collection("reservations").doc(id).delete();
+          bumpWrites(1);
+          await refreshDay(selectedDate);
+          if(tab === "monitor") await refreshMonitor(monitorDate);
+          if(tab === "week") await refreshWeek(weekStart);
+          if(tab === "year") await refreshYear();
+        }catch(err){
+          console.error(err);
+          setToast({ type:"ng", msg:"削除に失敗しました" });
+          setTimeout(()=>setToast(null), 2400);
+        }finally{
+          setBusy(false);
+        }
+      }
+
+      function doPrint(){
+        setTimeout(()=>window.print(), 120);
+      }
+
+      // Auto refresh master once auth ready（初回は静かに：未ログインでも赤トーストを出さない）
+      useEffect(() => {
+        if(!authReady) return;
+        refreshMasters({ silent:true });
+      }, [authReady]);
+
+      // Auto refresh day reservations on first load
+      useEffect(() => {
+        if(!authReady) return;
+        refreshDay(selectedDate);
+      }, [authReady]);
+
+      const fyInfo = useMemo(() => {
+        const d = parseKeyToDate(selectedDate);
+        const y = d.getFullYear();
+        const m = d.getMonth()+1;
+        const fy = (m>=4) ? y : (y-1);
+        return { fy, start: `${fy}-04-01`, end: `${fy+1}-03-31` };
+      }, [selectedDate]);
+
+      return (
+        <div className="min-h-screen pb-24">
+          <div className="max-w-7xl mx-auto px-4 pt-5">
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <div>
+                <div className="text-2xl font-black text-slate-900">夷隅教育会館 管理</div>
+                <div className="text-xs font-bold text-slate-400 mt-1">部屋予約 / 入口モニター / 週・年度一覧 / 部屋・機材マスタ編集</div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  className={classNames("rounded-2xl px-4 py-2 font-black border shadow-sm",
+                    busy ? "bg-slate-100 text-slate-400 border-slate-200" : "bg-sky-600 text-white border-sky-600")}
+                  disabled={busy}
+                  onClick={() => {
+                    if(tab === "monitor") return refreshMonitor(monitorDate);
+                    if(tab === "week") return refreshWeek(weekStart);
+                    if(tab === "year") return refreshYear();
+                    return refreshDay(selectedDate);
+                  }}
+                >
+                  更新
+                </button>
+	                <button className="rounded-2xl px-4 py-2 font-black bg-white border border-slate-200 text-slate-700" onClick={() => refreshMasters()} disabled={busy}>
+                  マスタ更新
+                </button>
+                <button className="rounded-2xl px-4 py-2 font-black bg-white border border-slate-200 text-slate-700" onClick={doPrint}>
+                  印刷
+                </button>
+
+                {isLoggedIn ? (
+                  <button className="rounded-2xl px-4 py-2 font-black bg-white border border-slate-200 text-slate-700" onClick={logout}>
+                    ログアウト
+                  </button>
+                ) : (
+                  <LoginButton busy={busy} onLogin={loginWithShared} />
+                )}
+              </div>
+            </div>
+
+            <div className="mt-3 flex items-center gap-2 flex-wrap">
+              <Pill tone={isLoggedIn ? "emerald" : "slate"}>{isLoggedIn ? "編集モード（ログイン中）" : "閲覧モード（ログインなし）"}</Pill>
+              <Pill tone="sky">共通ID：{SHARED_LOGIN_CODE}</Pill>
+              <Pill tone="violet">年度：{fyInfo.fy}（{fyInfo.start}〜{fyInfo.end}）</Pill>
+              <Pill tone="amber">概算 reads：{ops.reads}</Pill>
+              <Pill tone="amber">概算 writes：{ops.writes}</Pill>
+              <button className="px-3 py-1.5 rounded-xl bg-white border border-slate-200 font-black text-xs text-slate-700" onClick={resetOps}>
+                read/write リセット
+              </button>
+              {busy ? <Pill tone="amber">処理中…</Pill> : null}
+            </div>
+          </div>
+
+          <div className="max-w-7xl mx-auto px-4 mt-3">
+            <div className="grid grid-cols-2 md:grid-cols-8 gap-2 no-print">
+              <TabButton active={tab==="dashboard"} onClick={()=>setTab("dashboard")}>全体</TabButton>
+              <TabButton active={tab==="monitor"} onClick={()=>{ setTab("monitor"); setMonitorDate(todayKeyLocal()); }}>入口モニター</TabButton>
+              <TabButton active={tab==="day"} onClick={()=>setTab("day")}>日予約</TabButton>
+              <TabButton active={tab==="week"} onClick={()=>{ setTab("week"); }}>週一覧</TabButton>
+              <TabButton active={tab==="year"} onClick={()=>{ setTab("year"); }}>年度一覧</TabButton>
+              <TabButton active={tab==="equip"} onClick={()=>setTab("equip")}>機材</TabButton>
+              <TabButton active={tab==="rooms"} onClick={()=>setTab("rooms")}>部屋</TabButton>
+              <TabButton active={tab==="help"} onClick={()=>setTab("help")}>設定</TabButton>
+            </div>
+          </div>
+
+          <div className="max-w-7xl mx-auto px-4 mt-4 space-y-4">
+            {tab === "dashboard" && (
+              <div className="space-y-4">
+                <Card printCard>
+                  <SectionTitle
+                    icon="🏠"
+                    title="今日の状況"
+                    sub="まずはここだけ見ればOK"
+                    right={isLoggedIn ? (
+                      <button className="rounded-2xl px-4 py-2 font-black bg-emerald-600 text-white border border-emerald-600 shadow-sm no-print" onClick={openNew}>
+                        ＋予約追加
+                      </button>
+                    ) : null}
+                  />
+
+                  <div className="mt-4 grid md:grid-cols-3 gap-3">
+                    <div className="rounded-3xl border border-slate-100 bg-slate-50 p-4">
+                      <div className="text-xs font-black text-slate-500">部屋予約（件数）</div>
+                      <div className="text-3xl font-black text-slate-800 mt-1">{dayReservations.length}</div>
+                      <div className="text-xs font-bold text-slate-400 mt-2">日付：{selectedDate}</div>
+                    </div>
+
+                    <div className="rounded-3xl border border-slate-100 bg-slate-50 p-4">
+                      <div className="text-xs font-black text-slate-500">機材使用（合計）</div>
+                      <div className="mt-2 space-y-2">
+                        {equipmentsActive.length === 0 ? (
+                          <div className="text-xs font-bold text-slate-400">機材が未設定です</div>
+                        ) : equipmentsActive.map(e => (
+                          <div key={e.id} className="flex items-center justify-between">
+                            <div className="font-black text-slate-800">{e.name}</div>
+                            <div className="font-black text-slate-800">{dayEquipmentUsed[e.id]||0} / {(e.countTotal ?? "—")}</div>
+                          </div>
+                        ))}
+                      </div>
+                      <div className="text-xs font-bold text-slate-400 mt-2">※予約に紐づく「使用台数」の合計</div>
+                    </div>
+
+                    <div className="rounded-3xl border border-slate-100 bg-slate-50 p-4">
+                      <div className="text-xs font-black text-slate-500">クイック操作</div>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <button className="px-3 py-2 rounded-2xl bg-white border border-slate-200 font-black text-slate-700" onClick={()=>{ setTab("day"); }}>
+                          日予約へ
+                        </button>
+                        <button className="px-3 py-2 rounded-2xl bg-white border border-slate-200 font-black text-slate-700" onClick={()=>{ setTab("week"); }}>
+                          週一覧へ
+                        </button>
+                        <button className="px-3 py-2 rounded-2xl bg-white border border-slate-200 font-black text-slate-700" onClick={()=>{ setTab("year"); }}>
+                          年度一覧へ
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="mt-4 flex items-center justify-between gap-2 flex-wrap">
+                    <div className="text-sm font-black text-slate-700">日付</div>
+                    <div className="flex items-center gap-2 no-print">
+                      <button className="px-3 py-2 rounded-2xl bg-white border border-slate-200 font-black text-slate-700" onClick={()=>setSelectedDate(todayKeyLocal())}>今日</button>
+                      <button className="px-3 py-2 rounded-2xl bg-white border border-slate-200 font-black text-slate-700" onClick={()=>setSelectedDate(addDaysKey(todayKeyLocal(),1))}>明日</button>
+                      <button className="px-3 py-2 rounded-2xl bg-white border border-slate-200 font-black text-slate-700" onClick={()=>setSelectedDate(addDaysKey(todayKeyLocal(),2))}>明後日</button>
+                    </div>
+                    <input type="date" className="rounded-2xl border border-slate-200 bg-white px-3 py-2 font-black text-slate-700" value={selectedDate} onChange={(e)=>setSelectedDate(e.target.value)} />
+                    <button className="px-3 py-2 rounded-2xl bg-white border border-slate-200 font-black text-slate-700" onClick={()=>refreshDay(selectedDate)} disabled={busy}>この日を更新</button>
+                  </div>
+
+                  <div className="mt-4 text-sm font-black text-slate-700">部屋ごとの予約（{selectedDate}）</div>
+                  <div className="mt-3 grid md:grid-cols-2 gap-3">
+                    {roomsActive.map(room => {
+                      const list = dayReservations.filter(r => r.roomId === room.id).slice().sort((a,b)=>Number(a.startMin||0)-Number(b.startMin||0));
+                      return (
+                        <div key={room.id} className="rounded-3xl border border-slate-100 p-4">
+                          <div className="flex items-center justify-between">
+                            <div className="space-y-0.5">
+                              <div className="text-xs font-black text-slate-400">{room.building}</div>
+                              <div className="font-black text-slate-800">{room.name}</div>
+                            </div>
+                            <Pill tone="slate">{list.length}件</Pill>
+                          </div>
+
+                          <div className="mt-3 space-y-2">
+                            {list.length === 0 ? (
+                              <div className="text-xs font-bold text-slate-400">予約なし</div>
+                            ) : list.map(r => (
+                              <div key={r.id} className="flex items-start justify-between gap-2 p-3 rounded-2xl bg-slate-50 border border-slate-100">
+                                <div className="min-w-0">
+                                  <div className="font-black text-slate-800">{minToHHMM(r.startMin||0)}–{minToHHMM(r.endMin||0)} / {r.groupName}</div>
+                                  <div className="text-xs font-bold text-slate-500 mt-1 flex gap-2 flex-wrap">
+                                    {equipmentsActive.map(e => (Number(r?.equipment?.[e.id]||0)>0) ? (
+                                      <Pill key={e.id} tone="sky">{(e.abbr||e.name)} {Number(r.equipment[e.id]||0)}</Pill>
+                                    ) : null)}
+                                    {r.note ? <Pill tone="slate">メモ</Pill> : null}
+                                  </div>
+                                </div>
+                                {isLoggedIn ? (
+                                  <div className="shrink-0 flex items-center gap-2 no-print">
+                                    <button className="px-3 py-2 rounded-2xl bg-white border border-slate-200 font-black text-slate-700" onClick={()=>openEdit(r)}>
+                                      編集
+                                    </button>
+                                  </div>
+                                ) : null}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </Card>
+              </div>
+            )}
+
+            {tab === "day" && (
+              <Card printCard>
+                <SectionTitle
+                  icon="📅"
+                  title="日予約"
+                  sub="日ごとの予約一覧（重複は保存時にブロック）"
+                  right={isLoggedIn ? (
+                    <button className="rounded-2xl px-4 py-2 font-black bg-emerald-600 text-white border border-emerald-600 shadow-sm no-print" onClick={openNew}>
+                      ＋予約追加
+                    </button>
+                  ) : null}
+                />
+
+                <div className="mt-4 flex items-center gap-2 flex-wrap">
+                  <input type="date" className="rounded-2xl border border-slate-200 bg-white px-3 py-2 font-black text-slate-700" value={selectedDate} onChange={(e)=>setSelectedDate(e.target.value)} />
+                  <button className="px-3 py-2 rounded-2xl bg-white border border-slate-200 font-black text-slate-700" onClick={()=>refreshDay(selectedDate)} disabled={busy}>
+                    この日を更新
+                  </button>
+                  <div className="text-xs font-bold text-slate-400">※表示が古い場合は「更新」</div>
+                </div>
+
+                <div className="mt-4 grid md:grid-cols-2 gap-3">
+                  {roomsActive.map(room => {
+                    const list = dayReservations.filter(r => r.roomId === room.id).slice().sort((a,b)=>Number(a.startMin||0)-Number(b.startMin||0));
+                    return (
+                      <div key={room.id} className="rounded-3xl border border-slate-100 p-4">
+                        <div className="flex items-center justify-between">
+                          <div className="space-y-0.5">
+                            <div className="text-xs font-black text-slate-400">{room.building}</div>
+                            <div className="font-black text-slate-800">{room.name}</div>
+                          </div>
+                          <Pill tone="slate">{list.length}件</Pill>
+                        </div>
+                        <div className="mt-3 space-y-2">
+                          {list.length === 0 ? (
+                            <div className="text-xs font-bold text-slate-400">予約なし</div>
+                          ) : list.map(r => (
+                            <div key={r.id} className="p-3 rounded-2xl bg-slate-50 border border-slate-100">
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="min-w-0">
+                                  <div className="font-black text-slate-800">{minToHHMM(r.startMin||0)}–{minToHHMM(r.endMin||0)} / {r.groupName}</div>
+                                  <div className="mt-1 flex flex-wrap gap-2">
+                                    {equipmentsActive.map(e => (Number(r?.equipment?.[e.id]||0)>0) ? (
+                                      <Pill key={e.id} tone="sky">{(e.abbr||e.name)} {Number(r.equipment[e.id]||0)}</Pill>
+                                    ) : null)}
+                                    {r.note ? <Pill tone="slate">メモ</Pill> : null}
+                                  </div>
+                                  {r.note ? <div className="text-xs font-bold text-slate-500 mt-2">{r.note}</div> : null}
+                                </div>
+                                {isLoggedIn ? (
+                                  <div className="shrink-0 flex flex-col gap-2 no-print">
+                                    <button className="px-3 py-2 rounded-2xl bg-white border border-slate-200 font-black text-slate-700" onClick={()=>openEdit(r)}>
+                                      編集
+                                    </button>
+                                    <button className="px-3 py-2 rounded-2xl bg-rose-50 border border-rose-200 font-black text-rose-700" onClick={()=>deleteReservation(r.id)}>
+                                      削除
+                                    </button>
+                                  </div>
+                                ) : null}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </Card>
+            )}
+
+            {tab === "monitor" && (
+              <Card printCard>
+                <SectionTitle
+                  icon="🖥️"
+                  title="入口モニター"
+                  sub="今日/明日/明後日をワンタップ切替。使う部屋だけ大きく表示。"
+                  right={
+                    <div className="flex items-center gap-2 flex-wrap no-print">
+                      <button className="rounded-2xl px-4 py-2 font-black bg-white border border-slate-200 text-slate-700" onClick={()=>setMonitorDate(todayKeyLocal())}>今日</button>
+                      <button className="rounded-2xl px-4 py-2 font-black bg-white border border-slate-200 text-slate-700" onClick={()=>setMonitorDate(addDaysKey(todayKeyLocal(),1))}>明日</button>
+                      <button className="rounded-2xl px-4 py-2 font-black bg-white border border-slate-200 text-slate-700" onClick={()=>setMonitorDate(addDaysKey(todayKeyLocal(),2))}>明後日</button>
+                      <button
+                        className="rounded-2xl px-4 py-2 font-black bg-slate-900 text-white border border-slate-900"
+                        onClick={() => {
+                          const el = document.documentElement;
+                          if(el.requestFullscreen) el.requestFullscreen();
+                        }}
+                      >
+                        全画面
+                      </button>
+                    </div>
+                  }
+                />
+
+                <div className="mt-4 flex items-center gap-2 flex-wrap">
+                  <div className="text-sm font-black text-slate-800">表示日</div>
+                  <input type="date" className="rounded-2xl border border-slate-200 bg-white px-3 py-2 font-black text-slate-700" value={monitorDate} onChange={(e)=>setMonitorDate(e.target.value)} />
+                  <button className="px-3 py-2 rounded-2xl bg-white border border-slate-200 font-black text-slate-700" onClick={()=>refreshMonitor(monitorDate)} disabled={busy}>
+                    この日を更新
+                  </button>
+                  <div className="text-xs font-bold text-slate-400">※最新にするには「更新」</div>
+                </div>
+
+                <MonitorBoard
+                  dateKey={monitorDate}
+                  rooms={roomsActive}
+                  equipmentsActive={equipmentsActive}
+                  reservations={monitorReservations}
+                />
+              </Card>
+            )}
+
+            {tab === "week" && (
+              <Card printCard>
+                <SectionTitle
+                  icon="🧾"
+                  title="週の予定（一覧）"
+                  sub={`週：${weekStart}〜${addDaysKey(weekStart,6)}（月曜始まり）`}
+                  right={
+                    <div className="flex items-center gap-2 flex-wrap no-print">
+                      <button className="rounded-2xl px-4 py-2 font-black bg-white border border-slate-200 text-slate-700" onClick={()=>{ const prev=addDaysKey(weekStart,-7); setWeekStart(prev); }}>
+                        ◀ 前週
+                      </button>
+                      <button className="rounded-2xl px-4 py-2 font-black bg-white border border-slate-200 text-slate-700" onClick={()=>{ const next=addDaysKey(weekStart,7); setWeekStart(next); }}>
+                        次週 ▶
+                      </button>
+                      <button className="rounded-2xl px-4 py-2 font-black bg-white border border-slate-200 text-slate-700" onClick={()=>refreshWeek(weekStart)} disabled={busy}>
+                        この週を更新
+                      </button>
+                    </div>
+                  }
+                />
+
+                <div className="mt-4 grid lg:grid-cols-3 gap-3">
+                  {weekKeys.map((dk, idx) => {
+                    const list = (weekReservations||[]).filter(r => r.date === dk).slice().sort((a,b)=>Number(a.startMin||0)-Number(b.startMin||0));
+                    const names = ["月","火","水","木","金","土","日"];
+                    return (
+                      <div key={dk} className="rounded-3xl border border-slate-100 bg-white p-4">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <div className="text-xs font-black text-slate-400">{names[idx]}</div>
+                            <div className="font-black text-slate-800">{dk}</div>
+                          </div>
+                          <Pill tone="slate">{list.length}件</Pill>
+                        </div>
+                        <div className="mt-3 space-y-2">
+                          {list.length===0 ? (
+                            <div className="text-xs font-bold text-slate-400">予約なし</div>
+                          ) : list.map(r => (
+                            <div key={r.id} className="p-3 rounded-2xl bg-slate-50 border border-slate-100">
+                              <div className="font-black text-slate-800">{minToHHMM(r.startMin||0)}–{minToHHMM(r.endMin||0)} / {roomName(r.roomId)}</div>
+                              <div className="text-xs font-bold text-slate-600 mt-1">{r.groupName}</div>
+                              <div className="mt-2 flex flex-wrap gap-2">
+                                {equipmentsActive.map(e => (Number(r?.equipment?.[e.id]||0)>0) ? (
+                                  <Pill key={e.id} tone="sky">{(e.abbr||e.name)} {Number(r.equipment[e.id]||0)}</Pill>
+                                ) : null)}
+                              </div>
+                              {isLoggedIn ? (
+                                <div className="mt-2 flex gap-2 no-print">
+                                  <button className="px-3 py-2 rounded-2xl bg-white border border-slate-200 font-black text-slate-700" onClick={()=>openEdit(r)}>
+                                    編集
+                                  </button>
+                                </div>
+                              ) : null}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div className="mt-3 text-xs font-bold text-slate-400">※週一覧は「この週を更新」でFirestoreから取得（概算readに反映）</div>
+              </Card>
+            )}
+
+            {tab === "year" && (
+              <Card printCard>
+                <SectionTitle
+                  icon="🗓️"
+                  title="年間の予定（一覧）"
+                  sub={`年度：${fyInfo.fy}（${fyInfo.start}〜${fyInfo.end}）`}
+                  right={
+                    <div className="flex items-center gap-2 flex-wrap no-print">
+                      <button className={classNames("rounded-2xl px-4 py-2 font-black border shadow-sm",
+                        yearBusy ? "bg-slate-100 text-slate-400 border-slate-200" : "bg-white text-slate-700 border-slate-200")}
+                        disabled={yearBusy}
+                        onClick={refreshYear}
+                      >
+                        年度一覧を更新
+                      </button>
+                    </div>
+                  }
+                />
+
+                <div className="mt-3 text-xs font-bold text-slate-400">※取得件数が多いとreadが増えます。必要なときに「年度一覧を更新」してください。</div>
+
+                <div className="mt-4 rounded-3xl border border-slate-100 bg-white p-3">
+                  <div className="text-xs font-black text-slate-500">結果：{yearReservations.length} 件</div>
+                  <div className="mt-2 space-y-2 max-h-[65vh] overflow-auto">
+                    {yearReservations.length===0 ? (
+                      <div className="text-sm font-bold text-slate-400 p-3">年度一覧がここに出ます（更新を押してください）</div>
+                    ) : yearReservations.map(r => (
+                      <div key={r.id} className="p-3 rounded-2xl bg-slate-50 border border-slate-100">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <div className="font-black text-slate-900">{r.date} {minToHHMM(r.startMin||0)}–{minToHHMM(r.endMin||0)} / {r.groupName}</div>
+                            <div className="text-xs font-bold text-slate-600 mt-1">{roomBuilding(r.roomId)} / {roomName(r.roomId)}</div>
+                            <div className="mt-2 flex flex-wrap gap-2">
+                              {equipmentsActive.map(e => (Number(r?.equipment?.[e.id]||0)>0) ? (
+                                <Pill key={e.id} tone="sky">{(e.abbr||e.name)} {Number(r.equipment[e.id]||0)}</Pill>
+                              ) : null)}
+                              {r.note ? <Pill tone="slate">メモ</Pill> : null}
+                            </div>
+                            {r.note ? <div className="text-xs font-bold text-slate-500 mt-2">{r.note}</div> : null}
+                          </div>
+                          <div className="shrink-0 flex gap-2 no-print">
+                            <button className="px-3 py-2 rounded-2xl bg-white border border-slate-200 font-black text-slate-700" onClick={()=>{ setSelectedDate(r.date); setTab("day"); }}>
+                              日へ
+                            </button>
+                            {isLoggedIn ? (
+                              <button className="px-3 py-2 rounded-2xl bg-white border border-slate-200 font-black text-slate-700" onClick={()=>openEdit(r)}>
+                                編集
+                              </button>
+                            ) : null}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </Card>
+            )}
+
+            {tab === "equip" && (
+              <Card printCard>
+                <SectionTitle
+                  icon="🧰"
+                  title="機材マスタ"
+                  sub="機材の種類・台数（総数）を追加/変更できます"
+                />
+
+                <div className="mt-4">
+                  {!isLoggedIn ? (
+                    <div className="p-4 rounded-3xl bg-amber-50 border border-amber-100 text-amber-800 font-bold">編集するにはログインしてください</div>
+                  ) : null}
+
+                  <EquipmentManager
+                    equipments={equipments}
+                    setEquipments={setEquipments}
+                    isLoggedIn={isLoggedIn}
+                    busy={busy}
+                    onSaved={() => refreshMasters()}
+                    bumpReads={bumpReads}
+                    bumpWrites={bumpWrites}
+                  />
+                </div>
+
+                <div className="mt-4 rounded-3xl border border-slate-100 bg-slate-50 p-4">
+                  <div className="font-black text-slate-800">メモ</div>
+                  <ul className="mt-2 text-sm font-bold text-slate-700 list-disc pl-5 space-y-1">
+                    <li>「active = false」は削除ではなく<strong>非表示</strong>です（過去データ保護）。</li>
+                    <li>予約入力/超過チェック/モニター表示は、activeな機材に追従します。</li>
+                  </ul>
+                </div>
+              </Card>
+            )}
+
+            {tab === "rooms" && (
+              <Card printCard>
+                <SectionTitle
+                  icon="🏢"
+                  title="部屋マスタ"
+                  sub="部屋名の追加/変更/非表示（削除しない）"
+                />
+
+                <div className="mt-4">
+                  {!isLoggedIn ? (
+                    <div className="p-4 rounded-3xl bg-amber-50 border border-amber-100 text-amber-800 font-bold">編集するにはログインしてください</div>
+                  ) : null}
+
+                  <RoomManager
+                    rooms={rooms}
+                    setRooms={setRooms}
+                    isLoggedIn={isLoggedIn}
+                    busy={busy}
+                    onSaved={() => refreshMasters()}
+                    bumpReads={bumpReads}
+                    bumpWrites={bumpWrites}
+                  />
+                </div>
+
+                <div className="mt-4 rounded-3xl border border-slate-100 bg-slate-50 p-4">
+                  <div className="font-black text-slate-800">メモ</div>
+                  <ul className="mt-2 text-sm font-bold text-slate-700 list-disc pl-5 space-y-1">
+                    <li>「active = false」は<strong>非表示</strong>です（予約データを壊しません）。</li>
+                    <li>表示順は order で調整できます（小さいほど上）。</li>
+                  </ul>
+                </div>
+              </Card>
+            )}
+
+            {tab === "help" && (
+              <Card printCard>
+                <SectionTitle
+                  icon="⚙️"
+                  title="設定"
+                  sub="read/writeの考え方（確認）と、運用ヒント"
+                />
+
+                <div className="mt-4 grid md:grid-cols-2 gap-3">
+                  <div className="rounded-3xl border border-slate-100 bg-slate-50 p-4">
+                    <div className="font-black text-slate-800">read/write カウント（概算）</div>
+                    <div className="text-sm font-bold text-slate-700 mt-2 space-y-1">
+                      <div>・Firestoreの取得(get)で read を、保存(set/add/delete)で write を<strong>概算</strong>加算します。</div>
+                      <div>・添付のSchool Calと同じ方式（ローカル集計）です。</div>
+                      <div>・マスタ更新/週・年度一覧の更新は read が増えます（必要時だけ更新推奨）。</div>
+                    </div>
+                    <div className="mt-3">
+                      <button className="px-4 py-2 rounded-2xl bg-white border border-slate-200 font-black text-slate-700" onClick={resetOps}>今月のread/writeをリセット</button>
+                    </div>
+                  </div>
+
+                  <div className="rounded-3xl border border-slate-100 bg-slate-50 p-4">
+                    <div className="font-black text-slate-800">運用ヒント</div>
+                    <ul className="mt-2 text-sm font-bold text-slate-700 list-disc pl-5 space-y-1">
+                      <li>入口モニターは日付を独立管理（今日/明日/明後日切替）。</li>
+                      <li>部屋/機材は削除ではなく「非表示」で運用できます。</li>
+                      <li>週一覧・年度一覧は「更新」でまとめて取得（必要時のみ）。</li>
+                    </ul>
+                  </div>
+                </div>
+              </Card>
+            )}
+          </div>
+
+          <Modal
+            open={editorOpen}
+            onClose={()=>{ setEditorOpen(false); setEditModel(null); }}
+            title={editModel?.id ? "予約を編集" : "予約を追加"}
+          >
+            {editModel ? (
+              <ReservationEditor
+                model={editModel}
+                setModel={setEditModel}
+                roomsActive={roomsActive}
+                equipmentsActive={equipmentsActive}
+                busy={busy}
+                isLoggedIn={isLoggedIn}
+                onSave={saveReservation}
+                onCancel={()=>{ setEditorOpen(false); setEditModel(null); }}
+              />
+            ) : null}
+          </Modal>
+
+          {toast ? (
+            <div className={classNames(
+              "fixed left-1/2 -translate-x-1/2 bottom-4 z-50 px-4 py-3 rounded-3xl shadow-lg border font-black no-print",
+              toast.type==="ok" ? "bg-emerald-600 text-white border-emerald-700" : "bg-rose-600 text-white border-rose-700"
+            )}>
+              {toast.msg}
+            </div>
+          ) : null}
+
+          <div className="fixed inset-x-0 bottom-0 z-30 bg-white/85 glass border-t border-slate-100 no-print">
+            <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between gap-3">
+              <div className="text-xs font-bold text-slate-500">※「更新」でFirestoreから読み込み（オフライン時はキャッシュ表示）</div>
+              <div className="text-xs font-bold text-slate-400">共通ID：{SHARED_LOGIN_CODE}</div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    /**********************
+     * Login
+     **********************/
+    function LoginButton({busy, onLogin}){
+      const [open, setOpen] = useState(false);
+      const [pw, setPw] = useState("");
+
+      return (
+        <>
+          <button
+            className={classNames("rounded-2xl px-4 py-2 font-black border shadow-sm",
+              busy ? "bg-slate-100 text-slate-400 border-slate-200" : "bg-slate-900 text-white border-slate-900")}
+            disabled={busy}
+            onClick={()=>setOpen(true)}
+          >
+            ログイン
+          </button>
+
+          <Modal open={open} onClose={()=>setOpen(false)} title="共通IDログイン">
+            <div className="space-y-3">
+              <div className="rounded-3xl border border-slate-100 bg-slate-50 p-4">
+                <div className="font-black text-slate-800">パスワード</div>
+                <div className="text-xs font-bold text-slate-500 mt-1">共通ID：{SHARED_LOGIN_CODE}</div>
+                <input
+                  type="password"
+                  className="mt-3 w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 font-bold text-slate-700"
+                  value={pw}
+                  onChange={(e)=>setPw(e.target.value)}
+                  placeholder="パスワード"
+                />
+                <div className="mt-3 flex gap-2">
+                  <button
+                    className={classNames("w-full rounded-2xl px-4 py-3 font-black shadow-sm border",
+                      busy ? "bg-slate-100 text-slate-400 border-slate-200" : "bg-emerald-600 text-white border-emerald-600")}
+                    disabled={busy}
+                    onClick={()=>{ onLogin(pw); setOpen(false); setPw(""); }}
+                  >
+                    ログイン
+                  </button>
+                  <button className="rounded-2xl px-4 py-3 font-black bg-white border border-slate-200 text-slate-700" onClick={()=>setOpen(false)}>
+                    キャンセル
+                  </button>
+                </div>
+              </div>
+            </div>
+          </Modal>
+        </>
+      );
+    }
+
+    /**********************
+     * Reservation Editor
+     **********************/
+    function ReservationEditor({model, setModel, roomsActive, equipmentsActive, busy, isLoggedIn, onSave, onCancel}){
+      const roomGroups = useMemo(() => {
+        const g = {};
+        for(const r of roomsActive){
+          const b = r.building || "その他";
+          if(!g[b]) g[b] = [];
+          g[b].push(r);
+        }
+        return g;
+      }, [roomsActive]);
+
+      function setField(k,v){ setModel(prev => ({ ...prev, [k]: v })); }
+      function setEquip(k,v){
+        const n = Math.max(0, Math.min(999, Number(v)||0));
+        setModel(prev => ({ ...prev, equipment: { ...(prev.equipment||{}), [k]: n }}));
+      }
+
+      const opts10 = useMemo(() => {
+        const a = [];
+        for(let m=0; m<=23*60+50; m+=10) a.push({ value:m, label:minToHHMM(m) });
+        return a;
+      }, []);
+      const endOpts = opts10.filter(o => o.value >= (Number(model.startMin)||0) + 10);
+
+      return (
+        <div className="space-y-4">
+          {!isLoggedIn ? (
+            <div className="p-4 rounded-3xl bg-amber-50 border border-amber-100 text-amber-800 font-bold">
+              編集するにはログインしてください（閲覧モードでは保存できません）
+            </div>
+          ) : null}
+
+          <div className="grid md:grid-cols-2 gap-3">
+            <div>
+              <div className="text-sm font-black text-slate-700 mb-2">日付</div>
+              <input type="date" className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 font-bold text-slate-700" value={model.date} onChange={(e)=>setField("date", e.target.value)} />
+            </div>
+            <div>
+              <div className="text-sm font-black text-slate-700 mb-2">部屋</div>
+              <select className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 font-bold text-slate-700" value={model.roomId} onChange={(e)=>setField("roomId", e.target.value)}>
+                {Object.keys(roomGroups).map(b => (
+                  <optgroup key={b} label={b}>
+                    {roomGroups[b].map(r => (
+                      <option key={r.id} value={r.id}>{r.name}</option>
+                    ))}
+                  </optgroup>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div className="grid md:grid-cols-2 gap-3">
+            <div>
+              <div className="text-sm font-black text-slate-700 mb-2">開始（10分単位）</div>
+              <select
+                className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 font-bold text-slate-700"
+                value={model.startMin}
+                onChange={(e)=>{
+                  const s = Number(e.target.value);
+                  const eMin = Number(model.endMin)||0;
+                  setField("startMin", s);
+                  if(eMin <= s) setField("endMin", s+10);
+                }}
+              >
+                {opts10.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+            </div>
+            <div>
+              <div className="text-sm font-black text-slate-700 mb-2">終了（開始＋10分以上）</div>
+              <select className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 font-bold text-slate-700" value={model.endMin} onChange={(e)=>setField("endMin", Number(e.target.value))}>
+                {endOpts.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+            </div>
+          </div>
+
+          <div>
+            <div className="text-sm font-black text-slate-700 mb-2">団体名（必須）</div>
+            <input className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 font-bold text-slate-700" value={model.groupName} onChange={(e)=>setField("groupName", e.target.value)} placeholder="例：○○研究会、△△クラブ など" />
+          </div>
+
+          <div className="grid md:grid-cols-2 gap-3">
+            <div className="rounded-3xl border border-slate-100 bg-slate-50 p-4">
+              <div className="font-black text-slate-800">機材</div>
+              <div className="mt-3 space-y-3">
+                {equipmentsActive.length === 0 ? (
+                  <div className="text-xs font-bold text-slate-400">機材マスタが未設定です（機材タブで追加）</div>
+                ) : equipmentsActive.map(e => (
+                  <div key={e.id} className="flex items-center justify-between gap-2">
+                    <div className="font-bold text-slate-700">{e.name}</div>
+                    <input type="number" min="0" max="999" className="w-28 text-right rounded-2xl border border-slate-200 bg-white px-3 py-2 font-black text-slate-700" value={model?.equipment?.[e.id] ?? 0} onChange={(ev)=>setEquip(e.id, ev.target.value)} />
+                  </div>
+                ))}
+                <div className="text-xs font-bold text-slate-400">※保存前に「同時間帯で総数超過」を警告します</div>
+              </div>
+            </div>
+
+            <div className="rounded-3xl border border-slate-100 bg-slate-50 p-4">
+              <div className="font-black text-slate-800">メモ（任意）</div>
+              <textarea className="mt-3 w-full h-28 rounded-2xl border border-slate-200 bg-white px-3 py-2 font-bold text-slate-700" value={model.note} onChange={(e)=>setField("note", e.target.value)} placeholder="例：机配置、来館時間の目安、鍵の受け渡し など" />
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              className={classNames("w-full rounded-2xl px-4 py-3 font-black shadow-sm border",
+                (!isLoggedIn || busy) ? "bg-slate-100 text-slate-400 border-slate-200" : "bg-emerald-600 text-white border-emerald-600")}
+              disabled={!isLoggedIn || busy}
+              onClick={()=>onSave(model)}
+            >
+              保存
+            </button>
+            <button className="rounded-2xl px-4 py-3 font-black bg-white border border-slate-200 text-slate-700" onClick={onCancel}>
+              キャンセル
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    /**********************
+     * Monitor Board
+     **********************/
+    function MonitorBoard({dateKey, rooms, reservations, equipmentsActive}){
+      const byRoom = useMemo(() => {
+        const m = {};
+        for(const r of rooms) m[r.id] = [];
+        for(const rr of reservations||[]){
+          if(!m[rr.roomId]) m[rr.roomId] = [];
+          m[rr.roomId].push(rr);
+        }
+        for(const k of Object.keys(m)) m[k].sort((a,b)=>Number(a.startMin||0)-Number(b.startMin||0));
+        return m;
+      }, [rooms, reservations]);
+
+      const usedRooms = rooms.filter(r => (byRoom[r.id]||[]).length > 0);
+
+      return (
+        <div className="mt-4">
+          {usedRooms.length === 0 ? (
+            <div className="rounded-3xl border border-slate-100 bg-slate-50 p-6">
+              <div className="text-2xl font-black text-slate-800">{dateKey} の予約はありません</div>
+              <div className="text-sm font-bold text-slate-500 mt-2">※更新が必要な場合は「更新」</div>
+            </div>
+          ) : (
+            <div className="grid lg:grid-cols-2 gap-4">
+              {usedRooms.map(room => (
+                <div key={room.id} className="rounded-3xl border border-slate-100 bg-white p-5">
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <div className="text-xs font-black text-slate-400">{room.building}</div>
+                      <div className="text-2xl md:text-3xl font-black text-slate-900 mt-1">{room.name}</div>
+                    </div>
+                    <Pill tone="slate">{(byRoom[room.id]||[]).length}件</Pill>
+                  </div>
+
+                  <div className="mt-4 space-y-3">
+                    {(byRoom[room.id]||[]).map(r => (
+                      <div key={r.id} className="p-4 rounded-3xl bg-slate-50 border border-slate-100">
+                        <div className="text-2xl md:text-3xl font-black text-slate-900">
+                          {minToHHMM(r.startMin||0)}–{minToHHMM(r.endMin||0)}
+                        </div>
+                        <div className="text-xl md:text-2xl font-black text-slate-800 mt-1 break-words">{r.groupName}</div>
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          {equipmentsActive.map(e => (Number(r?.equipment?.[e.id]||0)>0) ? (
+                            <Pill key={e.id} tone="sky">{(e.abbr||e.name)} {Number(r.equipment[e.id]||0)}</Pill>
+                          ) : null)}
+                          {r.note ? <Pill tone="slate">メモ</Pill> : null}
+                        </div>
+                        {r.note ? <div className="text-sm font-bold text-slate-600 mt-2">{r.note}</div> : null}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    /**********************
+     * Room Manager
+     **********************/
+    function RoomManager({rooms, setRooms, isLoggedIn, busy, onSaved, bumpReads, bumpWrites}){
+      const [draft, setDraft] = useState({ id:"", building:"本館", name:"", order: 100, active:true });
+
+      const sorted = useMemo(() =>
+        (rooms||[]).slice().sort((a,b)=>(Number(a.order||0)-Number(b.order||0)) || String(a.building||"").localeCompare(String(b.building||"")) || String(a.name||"").localeCompare(String(b.name||"")))
+      , [rooms]);
+
+      async function saveOne(r){
+        if(!isLoggedIn) return;
+        if(!r.id) return alert("idが必要です");
+        const payload = {
+          name: (r.name||"").trim(),
+          building: (r.building||"").trim(),
+          order: Number(r.order||0),
+          active: r.active !== false,
+          updatedAt: serverTimestamp(),
+        };
+        await db.collection("rooms").doc(r.id).set(payload, { merge:true });
+        bumpWrites(1);
+        onSaved();
+      }
+
+      async function addNew(){
+        if(!isLoggedIn) return;
+        const id = (draft.id||"").trim();
+        const name = (draft.name||"").trim();
+        if(!id || !name) return alert("id と 部屋名が必要です");
+        const ref = db.collection("rooms").doc(id);
+        const snap = await ref.get();
+        bumpReads(1);
+        if(snap.exists){
+          alert("同じidが既に存在します（別のidにしてください）");
+          return;
+        }
+        await ref.set({
+          name,
+          building: (draft.building||"").trim(),
+          order: Number(draft.order||0),
+          active: draft.active !== false,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        }, { merge:true });
+        bumpWrites(1);
+        setDraft({ id:"", building: draft.building || "本館", name:"", order: Number(draft.order||100), active:true });
+        onSaved();
+      }
+
+      function updateLocal(id, patch){
+        setRooms(prev => (prev||[]).map(r => r.id===id ? ({...r, ...patch}) : r));
+      }
+
+      return (
+        <div className="space-y-4">
+          <div className="rounded-3xl border border-slate-100 bg-slate-50 p-4">
+            <div className="font-black text-slate-800">部屋を追加</div>
+            <div className="mt-3 grid md:grid-cols-5 gap-2">
+              <input className="rounded-2xl border border-slate-200 bg-white px-3 py-2 font-bold text-slate-700" placeholder="id（例：honkan_3f）" value={draft.id} onChange={(e)=>setDraft(d=>({...d, id:e.target.value}))} disabled={!isLoggedIn||busy} />
+              <select className="rounded-2xl border border-slate-200 bg-white px-3 py-2 font-bold text-slate-700" value={draft.building} onChange={(e)=>setDraft(d=>({...d, building:e.target.value}))} disabled={!isLoggedIn||busy}>
+                <option value="本館">本館</option>
+                <option value="別館">別館</option>
+                <option value="その他">その他</option>
+              </select>
+              <input className="rounded-2xl border border-slate-200 bg-white px-3 py-2 font-bold text-slate-700" placeholder="部屋名" value={draft.name} onChange={(e)=>setDraft(d=>({...d, name:e.target.value}))} disabled={!isLoggedIn||busy} />
+              <input type="number" className="rounded-2xl border border-slate-200 bg-white px-3 py-2 font-bold text-slate-700" placeholder="order" value={draft.order} onChange={(e)=>setDraft(d=>({...d, order:e.target.value}))} disabled={!isLoggedIn||busy} />
+              <button className={classNames("rounded-2xl px-4 py-2 font-black border shadow-sm",
+                (!isLoggedIn||busy) ? "bg-slate-100 text-slate-400 border-slate-200" : "bg-emerald-600 text-white border-emerald-600")} onClick={addNew} disabled={!isLoggedIn||busy}>
+                追加
+              </button>
+            </div>
+            <div className="mt-2 text-xs font-bold text-slate-400">※削除ではなく「active=false」で非表示運用</div>
+          </div>
+
+          <div className="rounded-3xl border border-slate-100 bg-white p-3 overflow-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs font-black text-slate-500">
+                  <th className="p-2">表示</th>
+                  <th className="p-2">id</th>
+                  <th className="p-2">建物</th>
+                  <th className="p-2">部屋名</th>
+                  <th className="p-2">order</th>
+                  <th className="p-2">保存</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sorted.map(r => (
+                  <tr key={r.id} className="border-t border-slate-100">
+                    <td className="p-2">
+                      <input type="checkbox" checked={r.active !== false} onChange={(e)=>updateLocal(r.id,{active:e.target.checked})} disabled={!isLoggedIn||busy} />
+                    </td>
+                    <td className="p-2 font-mono text-xs text-slate-600">{r.id}</td>
+                    <td className="p-2">
+                      <select className="rounded-xl border border-slate-200 bg-white px-2 py-1 font-bold text-slate-700" value={r.building||""} onChange={(e)=>updateLocal(r.id,{building:e.target.value})} disabled={!isLoggedIn||busy}>
+                        <option value="本館">本館</option>
+                        <option value="別館">別館</option>
+                        <option value="その他">その他</option>
+                      </select>
+                    </td>
+                    <td className="p-2">
+                      <input className="w-full rounded-xl border border-slate-200 bg-white px-2 py-1 font-bold text-slate-700" value={r.name||""} onChange={(e)=>updateLocal(r.id,{name:e.target.value})} disabled={!isLoggedIn||busy} />
+                    </td>
+                    <td className="p-2">
+                      <input type="number" className="w-24 rounded-xl border border-slate-200 bg-white px-2 py-1 font-bold text-slate-700" value={Number(r.order||0)} onChange={(e)=>updateLocal(r.id,{order:Number(e.target.value||0)})} disabled={!isLoggedIn||busy} />
+                    </td>
+                    <td className="p-2">
+                      <button className={classNames("px-3 py-2 rounded-2xl font-black border",
+                        (!isLoggedIn||busy) ? "bg-slate-100 text-slate-400 border-slate-200" : "bg-slate-900 text-white border-slate-900")} onClick={()=>saveOne(r)} disabled={!isLoggedIn||busy}>
+                        保存
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      );
+    }
+
+    /**********************
+     * Equipment Manager
+     **********************/
+    function EquipmentManager({equipments, setEquipments, isLoggedIn, busy, onSaved, bumpReads, bumpWrites}){
+      const [draft, setDraft] = useState({ id:"", name:"", abbr:"", countTotal: 0, order: 100, active:true });
+
+      const sorted = useMemo(() =>
+        (equipments||[]).slice().sort((a,b)=>(Number(a.order||0)-Number(b.order||0)) || String(a.name||"").localeCompare(String(b.name||"")))
+      , [equipments]);
+
+      function updateLocal(id, patch){
+        setEquipments(prev => (prev||[]).map(e => e.id===id ? ({...e, ...patch}) : e));
+      }
+
+      async function saveOne(e){
+        if(!isLoggedIn) return;
+        if(!e.id) return alert("idが必要です");
+        const payload = {
+          name: (e.name||"").trim(),
+          abbr: (e.abbr||"").trim(),
+          countTotal: Number(e.countTotal||0),
+          order: Number(e.order||0),
+          active: e.active !== false,
+          updatedAt: serverTimestamp(),
+        };
+        await db.collection("equipments").doc(e.id).set(payload, { merge:true });
+        bumpWrites(1);
+        onSaved();
+      }
+
+      async function addNew(){
+        if(!isLoggedIn) return;
+        const id = (draft.id||"").trim();
+        const name = (draft.name||"").trim();
+        if(!id || !name) return alert("id と 機材名が必要です");
+        const ref = db.collection("equipments").doc(id);
+        const snap = await ref.get();
+        bumpReads(1);
+        if(snap.exists){
+          alert("同じidが既に存在します（別のidにしてください）");
+          return;
+        }
+        await ref.set({
+          name,
+          abbr: (draft.abbr||"").trim(),
+          countTotal: Number(draft.countTotal||0),
+          order: Number(draft.order||0),
+          active: draft.active !== false,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        }, { merge:true });
+        bumpWrites(1);
+        setDraft({ id:"", name:"", abbr:"", countTotal: 0, order: Number(draft.order||100), active:true });
+        onSaved();
+      }
+
+      return (
+        <div className="space-y-4">
+          <div className="rounded-3xl border border-slate-100 bg-slate-50 p-4">
+            <div className="font-black text-slate-800">機材を追加</div>
+            <div className="mt-3 grid md:grid-cols-6 gap-2">
+              <input className="rounded-2xl border border-slate-200 bg-white px-3 py-2 font-bold text-slate-700" placeholder="id（例：mic）" value={draft.id} onChange={(e)=>setDraft(d=>({...d, id:e.target.value}))} disabled={!isLoggedIn||busy} />
+              <input className="rounded-2xl border border-slate-200 bg-white px-3 py-2 font-bold text-slate-700" placeholder="機材名" value={draft.name} onChange={(e)=>setDraft(d=>({...d, name:e.target.value}))} disabled={!isLoggedIn||busy} />
+              <input className="rounded-2xl border border-slate-200 bg-white px-3 py-2 font-bold text-slate-700" placeholder="略称（任意）" value={draft.abbr} onChange={(e)=>setDraft(d=>({...d, abbr:e.target.value}))} disabled={!isLoggedIn||busy} />
+              <input type="number" className="rounded-2xl border border-slate-200 bg-white px-3 py-2 font-bold text-slate-700" placeholder="総数" value={draft.countTotal} onChange={(e)=>setDraft(d=>({...d, countTotal:e.target.value}))} disabled={!isLoggedIn||busy} />
+              <input type="number" className="rounded-2xl border border-slate-200 bg-white px-3 py-2 font-bold text-slate-700" placeholder="order" value={draft.order} onChange={(e)=>setDraft(d=>({...d, order:e.target.value}))} disabled={!isLoggedIn||busy} />
+              <button className={classNames("rounded-2xl px-4 py-2 font-black border shadow-sm",
+                (!isLoggedIn||busy) ? "bg-slate-100 text-slate-400 border-slate-200" : "bg-emerald-600 text-white border-emerald-600")} onClick={addNew} disabled={!isLoggedIn||busy}>
+                追加
+              </button>
+            </div>
+            <div className="mt-2 text-xs font-bold text-slate-400">※総数が0のときは「超過警告なし」として扱います（運用に合わせて設定）</div>
+          </div>
+
+          <div className="rounded-3xl border border-slate-100 bg-white p-3 overflow-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs font-black text-slate-500">
+                  <th className="p-2">表示</th>
+                  <th className="p-2">id</th>
+                  <th className="p-2">機材名</th>
+                  <th className="p-2">略称</th>
+                  <th className="p-2">総数</th>
+                  <th className="p-2">order</th>
+                  <th className="p-2">保存</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sorted.map(e => (
+                  <tr key={e.id} className="border-t border-slate-100">
+                    <td className="p-2">
+                      <input type="checkbox" checked={e.active !== false} onChange={(ev)=>updateLocal(e.id,{active:ev.target.checked})} disabled={!isLoggedIn||busy} />
+                    </td>
+                    <td className="p-2 font-mono text-xs text-slate-600">{e.id}</td>
+                    <td className="p-2">
+                      <input className="w-full rounded-xl border border-slate-200 bg-white px-2 py-1 font-bold text-slate-700" value={e.name||""} onChange={(ev)=>updateLocal(e.id,{name:ev.target.value})} disabled={!isLoggedIn||busy} />
+                    </td>
+                    <td className="p-2">
+                      <input className="w-20 rounded-xl border border-slate-200 bg-white px-2 py-1 font-bold text-slate-700" value={e.abbr||""} onChange={(ev)=>updateLocal(e.id,{abbr:ev.target.value})} disabled={!isLoggedIn||busy} />
+                    </td>
+                    <td className="p-2">
+                      <input type="number" className="w-24 rounded-xl border border-slate-200 bg-white px-2 py-1 font-bold text-slate-700" value={Number(e.countTotal||0)} onChange={(ev)=>updateLocal(e.id,{countTotal:Number(ev.target.value||0)})} disabled={!isLoggedIn||busy} />
+                    </td>
+                    <td className="p-2">
+                      <input type="number" className="w-24 rounded-xl border border-slate-200 bg-white px-2 py-1 font-bold text-slate-700" value={Number(e.order||0)} onChange={(ev)=>updateLocal(e.id,{order:Number(ev.target.value||0)})} disabled={!isLoggedIn||busy} />
+                    </td>
+                    <td className="p-2">
+                      <button className={classNames("px-3 py-2 rounded-2xl font-black border",
+                        (!isLoggedIn||busy) ? "bg-slate-100 text-slate-400 border-slate-200" : "bg-slate-900 text-white border-slate-900")} onClick={()=>saveOne(e)} disabled={!isLoggedIn||busy}>
+                        保存
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      );
+    }
+
+    /**********************
+     * Mount
+     **********************/
+    ReactDOM.createRoot(document.getElementById("app")).render(<App />);
+  </script>
+</body>
+</html>
