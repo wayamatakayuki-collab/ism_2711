@@ -9,9 +9,9 @@
   <script src="https://cdn.tailwindcss.com"></script>
 
   <!-- React (UMD) + Babel -->
-  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js" onerror="this.onerror=null;this.src='https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js'"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" onerror="this.onerror=null;this.src='https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js'"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js" onerror="this.onerror=null;this.src='https://cdn.jsdelivr.net/npm/@babel/standalone/babel.min.js'"></script>
 
   <!-- Firebase (CDN / compat) -->
   <script src="https://www.gstatic.com/firebasejs/12.8.0/firebase-app-compat.js"></script>
@@ -61,6 +61,55 @@
     }
     .print-only { display: none; }
   </style>
+
+  <!-- Fatal error overlay (shows JS errors on-screen) -->
+  <script>
+    (function(){
+      function ensureBox(){
+        var box = document.getElementById('fatalErrorBox');
+        if(!box){
+          box = document.createElement('div');
+          box.id = 'fatalErrorBox';
+          box.style.cssText = 'position:fixed;inset:12px;z-index:999999;background:rgba(15,23,42,.96);color:#fff;padding:14px 14px 10px;border-radius:16px;font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica Neue,Arial,sans-serif;display:none;overflow:auto;box-shadow:0 10px 30px rgba(0,0,0,.35)';
+          box.innerHTML = '<div style="display:flex;gap:10px;align-items:center;justify-content:space-between;">'
+            +'<div><div style="font-weight:900;font-size:14px;">画面が表示されません（エラー詳細）</div><div style="opacity:.8;font-size:12px;">下の内容をそのまま送ってください</div></div>'
+            +'<button id="fatalClose" style="background:#fff;color:#0f172a;border:0;border-radius:999px;padding:6px 10px;font-weight:900;cursor:pointer;">閉じる</button>'
+            +'</div><pre id="fatalPre" style="margin:10px 0 0;white-space:pre-wrap;word-break:break-word;font-size:12px;line-height:1.35;"></pre>';
+          document.addEventListener('click', function(e){
+            if(e.target && e.target.id==='fatalClose'){ box.style.display='none'; }
+          });
+          document.addEventListener('DOMContentLoaded', function(){ document.body.appendChild(box); });
+        }
+        return box;
+      }
+      function show(msg){
+        try{
+          var box = ensureBox();
+          var pre = box.querySelector('#fatalPre');
+          pre.textContent = String(msg||'');
+          box.style.display = 'block';
+        }catch(e){ /* ignore */ }
+      }
+      window.addEventListener('error', function(ev){
+        var m = (ev && (ev.error && ev.error.stack)) || (ev && ev.message) || ev;
+        show(m);
+      });
+      window.addEventListener('unhandledrejection', function(ev){
+        var m = (ev && ev.reason && ev.reason.stack) || (ev && ev.reason) || ev;
+        show(m);
+      });
+      // If nothing renders within 2.5s, show a hint
+      window.addEventListener('load', function(){
+        setTimeout(function(){
+          var app = document.getElementById('app');
+          if(app && !app.firstElementChild){
+            show('初期描画が行われませんでした。\n\n可能性：CDN（React/Firebase/Tailwind）が読み込めていない、またはJSX/Babel内で例外が発生しています。\n\n1) ネット接続を確認\n2) ブラウザConsole（F12）に出ている赤いエラーを確認\n3) この画面のログを送ってください');
+          }
+        }, 2500);
+      });
+    })();
+  </script>
+
 </head>
 
 <body class="bg-slate-50 text-slate-800">
@@ -508,7 +557,7 @@ let ROOMS_LIVE = DEFAULT_ROOMS.slice();
       const [editorOpen, setEditorOpen] = useState(false);
       const [editTarget, setEditTarget] = useState(null);
 
-      const [reserveView, setReserveView] = useState("day"); // day | weektime | month
+      const [reserveView, setReserveView] = useState("day"); // day | weektime | weeklist | month
       const [csvOpen, setCsvOpen] = useState(false);
 
       const [ops, setOps] = useState(loadOps());
@@ -798,7 +847,7 @@ try{
           saveCache(`${CACHE_PREFIX}:templates`, tv);
 
           // 週表示中なら週も更新
-          if(tab === "reserve" && reserveView === "weektime"){
+          if(tab === "reserve" && ["weektime","weeklist"].includes(reserveView)){
             await refreshWeek();
           }
 
@@ -992,6 +1041,15 @@ useEffect(() => {
           equipment: blankEquipment(r?.equipment || {}),
         });
         setEditorOpen(true);
+
+
+      function openEditFromYear(r){
+        // 年度一覧から編集：該当日に移動して編集モーダルを開く
+        setSelectedDate(r.date);
+        setTab("reserve");
+        setReserveView("day");
+        openEdit(r);
+      }
       }
 
       function getReservationsForDate(dateKey){
@@ -1094,7 +1152,7 @@ ${warnings.join("
           setEditTarget(null);
 
           await refreshAll();
-          if(tab === "reserve" && reserveView === "weektime") await refreshWeek();
+          if(tab === "reserve" && ["weektime","weeklist"].includes(reserveView)) await refreshWeek();
         }catch(err){
           console.error(err);
           setToast({ type:"ng", msg:"保存に失敗しました" });
@@ -1112,7 +1170,7 @@ ${warnings.join("
           await db.collection("reservations").doc(id).delete();
           bumpWrites(1);
           await refreshAll();
-          if(tab === "reserve" && reserveView === "weektime") await refreshWeek();
+          if(tab === "reserve" && ["weektime","weeklist"].includes(reserveView)) await refreshWeek();
         }catch(err){
           console.error(err);
           setToast({ type:"ng", msg:"削除に失敗しました" });
@@ -1483,12 +1541,36 @@ setPresenceMonth(prev => {
 
           alert(`CSVインポート完了\n追加: ${addCount}\n更新: ${updateCount}\nスキップ(重複/機材超過): ${skipCount}`);
           await refreshAll();
-          if(tab === "reserve" && reserveView === "weektime") await refreshWeek();
+          if(tab === "reserve" && ["weektime","weeklist"].includes(reserveView)) await refreshWeek();
         }catch(err){
           console.error(err);
           alert("インポートに失敗しました");
         }finally{
           setBusy(false);
+        }
+      }
+
+      // 年度一覧（リスト）
+      async function refreshYearList(){
+        setYearListBusy(true);
+        try{
+          const snap = await db.collection("reservations")
+            .where("date", ">=", fyRange.start)
+            .where("date", "<=", fyRange.end)
+            .get();
+          bumpReads(snap.size);
+          const list = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+            .sort((a,b)=> (a.date||"").localeCompare(b.date||"") || (a.startMin||0)-(b.startMin||0));
+          setYearList(list);
+          setToast({ type:"ok", msg:`年度一覧を更新しました（${list.length}件）` });
+          setTimeout(()=>setToast(null), 2000);
+        }catch(err){
+          console.error(err);
+          const code = err?.code ? `（${err.code}）` : "";
+          setToast({ type:"ng", msg:`年度一覧の取得に失敗しました${code}` });
+          setTimeout(()=>setToast(null), 2600);
+        }finally{
+          setYearListBusy(false);
         }
       }
 
@@ -1853,7 +1935,7 @@ const equipmentUsed = useMemo(() => {
                 <SectionTitle
                   icon="📅"
                   title="部屋予約"
-                  sub={reserveView==="day" ? "日表示（選択中の日付）" : (reserveView==="weektime" ? `週間表（${weekStart}〜${weekEnd}） 8:00〜20:00` : `月一覧（${monthKeyLocal(parseKeyToDate(selectedDate))}）`)}
+                  sub={reserveView==="day" ? "日表示（選択中の日付）" : (reserveView==="weektime" ? `週間表（${weekStart}〜${weekEnd}） 8:00〜20:00` : (reserveView==="weeklist" ? `週一覧（${weekStart}〜${weekEnd}）` : `月一覧（${monthKeyLocal(parseKeyToDate(selectedDate))}）`))}
                   right={
                     <div className="flex items-center gap-2 flex-wrap no-print">
                       <button
@@ -1875,6 +1957,21 @@ const equipmentUsed = useMemo(() => {
                         }}
                       >
                         週間表
+                      </button>
+
+
+                      <button
+                        className={classNames("px-4 py-2 rounded-2xl font-black border shadow-sm",
+                          reserveView==="weeklist" ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-700 border-slate-200")}
+                        onClick={async ()=>{
+                          setReserveView("weeklist");
+                          if((weekReservations||[]).length===0){
+                            setBusy(true);
+                            try{ await refreshWeek(); } finally { setBusy(false); }
+                          }
+                        }}
+                      >
+                        週一覧
                       </button>
 
 <button
@@ -1980,6 +2077,20 @@ const equipmentUsed = useMemo(() => {
                   />
                 )}
 
+                {reserveView==="weeklist" && (
+                  <WeekListView
+                    weekKeys={weekKeys}
+                    weekStart={weekStart}
+                    weekEnd={weekEnd}
+                    rooms={ROOMS}
+                    equipmentsActive={equipmentsActive}
+                    weekReservations={weekReservations}
+                    isLoggedIn={isLoggedIn}
+                    onEdit={openEdit}
+                    onPickDate={(d)=>{ setSelectedDate(d); setReserveView("day"); }}
+                  />
+                )}
+
 {/* 月一覧 */}
 {reserveView==="month" && (
   <div className="mt-4">
@@ -2054,8 +2165,38 @@ const equipmentUsed = useMemo(() => {
                   }
                 />
 
-                <FiscalMonthPicker fy={fy} fyMonth={fyMonth} setFyMonth={setFyMonth} />
 
+
+                <div className="mt-3 flex items-center gap-2 flex-wrap no-print">
+                  <button
+                    className={classNames("rounded-2xl px-4 py-2 font-black border shadow-sm",
+                      yearView==="month" ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-700 border-slate-200")}
+                    onClick={()=>setYearView("month")}
+                  >
+                    月表示
+                  </button>
+                  <button
+                    className={classNames("rounded-2xl px-4 py-2 font-black border shadow-sm",
+                      yearView==="list" ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-700 border-slate-200")}
+                    onClick={()=>{ setYearView("list"); if(yearList.length===0) refreshYearList(); }}
+                  >
+                    年度一覧
+                  </button>
+                  {yearView==="list" ? (
+                    <button
+                      className={classNames("rounded-2xl px-4 py-2 font-black border shadow-sm",
+                        yearListBusy ? "bg-slate-100 text-slate-400 border-slate-200" : "bg-white text-slate-700 border-slate-200")}
+                      disabled={yearListBusy}
+                      onClick={refreshYearList}
+                    >
+                      年度を更新
+                    </button>
+                  ) : null}
+                </div>
+
+                                {yearView==="month" ? <FiscalMonthPicker fy={fy} fyMonth={fyMonth} setFyMonth={setFyMonth} /> : null}
+
+                {yearView==="month" && (
                 <div className="mt-4 grid lg:grid-cols-3 gap-4">
                   <MonthCalendar
                     fy={fy}
@@ -2079,6 +2220,20 @@ const equipmentUsed = useMemo(() => {
 />
 
                 </div>
+                )}
+
+                {yearView==="list" && (
+                  <YearListView
+                    fy={fy}
+                    fyRange={fyRange}
+                    list={yearList}
+                    rooms={ROOMS}
+                    equipmentsActive={equipmentsActive}
+                    isLoggedIn={isLoggedIn}
+                    onEdit={openEditFromYear}
+                    onPickDate={(d)=>{ setSelectedDate(d); setTab("reserve"); setReserveView("day"); }}
+                  />
+                )}
 
                 <div className="mt-3 text-xs font-bold text-slate-400">
                   ※年度タブは「月の予約をまとめて表示」します。予定（翌年以降）も date で保存されるので、そのまま入れてOKです。
@@ -2601,6 +2756,216 @@ function EquipmentManager({equipments, setEquipments, isLoggedIn, busy, onSaved,
     /**********************
      * 週間表（時間軸）
      **********************/
+
+
+    function WeekListView({weekKeys, weekStart, weekEnd, rooms, equipmentsActive, weekReservations, isLoggedIn, onEdit, onPickDate}){
+      const byDate = useMemo(() => {
+        const map = {};
+        for(const d of weekKeys) map[d] = [];
+        for(const r of (weekReservations||[])){
+          if(!map[r.date]) map[r.date] = [];
+          map[r.date].push(r);
+        }
+        for(const d of Object.keys(map)){
+          map[d].sort((a,b)=> (a.startMin||0)-(b.startMin||0) || (a.roomId||"").localeCompare(b.roomId||""));
+        }
+        return map;
+      }, [weekReservations, weekKeys]);
+
+      const roomsActive = useMemo(()=> (rooms||[])
+        .filter(r=>r.active!==false)
+        .sort((a,b)=>(a.order??999)-(b.order??999) || (a.name||"").localeCompare(b.name||""))
+      , [rooms]);
+
+      const buildings = useMemo(()=>{
+        const s = new Set();
+        for(const r of roomsActive){
+          if(r.building) s.add(r.building);
+        }
+        return Array.from(s).sort((a,b)=>String(a).localeCompare(String(b), 'ja'));
+      }, [roomsActive]);
+
+      const [filterBuilding, setFilterBuilding] = useState("all");
+      const [filterRoom, setFilterRoom] = useState("all");
+      const [q, setQ] = useState("");
+      const ql = q.trim().toLowerCase();
+
+      // building を変えたら room フィルタを自動リセット（矛盾回避）
+      useEffect(() => {
+        if(filterBuilding === 'all') return;
+        if(filterRoom === 'all') return;
+        const rb = roomBuilding(filterRoom);
+        if(rb !== filterBuilding) setFilterRoom('all');
+      }, [filterBuilding]);
+
+      // 全件（週）を1つの配列にまとめ、検索/フィルタ用に使う
+      const flatAll = useMemo(() => {
+        const a = [];
+        for(const d of weekKeys){
+          for(const r of (byDate[d]||[])) a.push(r);
+        }
+        return a;
+      }, [byDate, weekKeys]);
+
+      const filteredAll = useMemo(() => {
+        const a = [];
+        for(const r of flatAll){
+          if(filterBuilding!=="all" && roomBuilding(r.roomId)!==filterBuilding) continue;
+          if(filterRoom!=="all" && r.roomId!==filterRoom) continue;
+          if(ql){
+            const hay = `${r.date||""} ${roomBuilding(r.roomId)||""} ${roomName(r.roomId)||""} ${r.groupName||""} ${r.note||""}`.toLowerCase();
+            if(!hay.includes(ql)) continue;
+          }
+          a.push(r);
+        }
+        return a;
+      }, [flatAll, filterBuilding, filterRoom, ql]);
+
+      const equipTotals = useMemo(() => {
+        const t = {};
+        for(const e of (equipmentsActive||[])) t[e.id] = 0;
+        for(const r of filteredAll){
+          const eq = r.equipment || {};
+          for(const e of (equipmentsActive||[])){
+            const n = Number(eq[e.id] ?? 0) || 0;
+            t[e.id] = (t[e.id]||0) + n;
+          }
+        }
+        return t;
+      }, [filteredAll, equipmentsActive]);
+
+      return (
+        <div className="mt-4">
+          <div className="rounded-3xl border border-slate-100 bg-slate-50 p-4">
+            <div className="flex items-start justify-between gap-3 flex-wrap">
+              <div>
+                <div className="font-black text-slate-800">週一覧（{weekStart}〜{weekEnd}）</div>
+                <div className="text-xs font-bold text-slate-500 mt-1">※日付をタップすると日表示へ。予約カードをタップすると編集（ログイン時）。</div>
+              </div>
+              <div className="flex items-center gap-2 flex-wrap no-print">
+                <select
+                  className="rounded-2xl border border-slate-200 bg-white px-3 py-2 font-bold text-slate-700"
+                  value={filterBuilding}
+                  onChange={(e)=>setFilterBuilding(e.target.value)}
+                >
+                  <option value="all">全建物</option>
+                  {buildings.map(b => <option key={b} value={b}>{b}</option>)}
+                </select>
+                <select
+                  className="rounded-2xl border border-slate-200 bg-white px-3 py-2 font-bold text-slate-700"
+                  value={filterRoom}
+                  onChange={(e)=>setFilterRoom(e.target.value)}
+                >
+                  <option value="all">全部屋</option>
+                  {roomsActive
+                    .filter(r => filterBuilding==='all' ? true : (r.building===filterBuilding))
+                    .map(r => (
+                      <option key={r.id} value={r.id}>{(r.building?`${r.building} / `:"")}{r.name}</option>
+                    ))}
+                </select>
+                <input
+                  className="rounded-2xl border border-slate-200 bg-white px-3 py-2 font-bold text-slate-700"
+                  placeholder="検索（団体名/備考/部屋）"
+                  value={q}
+                  onChange={(e)=>setQ(e.target.value)}
+                />
+              </div>
+            </div>
+
+            <div className="mt-3 flex items-center justify-between gap-2 flex-wrap">
+              <div className="flex items-center gap-2 flex-wrap">
+                <Pill tone={filteredAll.length?"sky":"slate"}>{filteredAll.length}件</Pill>
+                {(equipmentsActive||[]).map(e => {
+                  const n = equipTotals[e.id]||0;
+                  if(n<=0) return null;
+                  return <Pill key={e.id} tone="emerald">{e.abbr||e.name}:{n}</Pill>;
+                })}
+              </div>
+              <div className="text-xs font-bold text-slate-400">フィルタは週全体に適用</div>
+            </div>
+          </div>
+
+          <div className="mt-4 grid lg:grid-cols-2 gap-4">
+            {weekKeys.map(dk => {
+              const list = (byDate[dk] || []).filter(r => {
+                if(filterBuilding!=="all" && roomBuilding(r.roomId)!==filterBuilding) return false;
+                if(filterRoom!=="all" && r.roomId!==filterRoom) return false;
+                if(!ql) return true;
+                const hay = `${r.groupName||""} ${r.note||""} ${roomName(r.roomId)||""}`.toLowerCase();
+                return hay.includes(ql);
+              });
+
+              const dayTotals = (()=>{
+                const t = {};
+                for(const e of (equipmentsActive||[])) t[e.id]=0;
+                for(const r of list){
+                  const eq = r.equipment || {};
+                  for(const e of (equipmentsActive||[])) t[e.id] += (Number(eq[e.id]??0)||0);
+                }
+                return t;
+              })();
+
+              return (
+                <div key={dk} className="rounded-3xl border border-slate-100 bg-white p-4">
+                  <button
+                    className="text-left w-full"
+                    onClick={()=>onPickDate?.(dk)}
+                    title="日表示へ"
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="font-black text-slate-800">{dk}</div>
+                      <Pill tone={list.length?"sky":"slate"}>{list.length}件</Pill>
+                    </div>
+                  </button>
+                  <div className="mt-2 flex gap-1 flex-wrap">
+                    {(equipmentsActive||[]).map(e => {
+                      const n = dayTotals[e.id]||0;
+                      if(n<=0) return null;
+                      return <Pill key={e.id} tone="emerald">{e.abbr||e.name}:{n}</Pill>;
+                    })}
+                  </div>
+
+                  <div className="mt-3 space-y-2">
+                    {list.length===0 ? (
+                      <div className="text-xs font-bold text-slate-400">予定なし</div>
+                    ) : list.map(r => (
+                      <button
+                        key={r.id}
+                        className={classNames("w-full text-left p-3 rounded-2xl border", isLoggedIn?"bg-slate-50 border-slate-100 hover:bg-slate-100":"bg-white border-slate-100")}
+                        onClick={()=>{ if(isLoggedIn) onEdit?.(r); }}
+                        disabled={!isLoggedIn}
+                        title={isLoggedIn?"編集":"閲覧のみ"}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div>
+                            <div className="text-sm font-black text-slate-800">{fmtRange(r.startMin, r.endMin)}</div>
+                            <div className="text-sm font-black text-sky-800 mt-0.5">{r.groupName||""}</div>
+                            <div className="text-xs font-bold text-slate-500 mt-0.5">{roomBuilding(r.roomId)} / {roomName(r.roomId)}</div>
+                            {r.note ? <div className="text-xs font-bold text-slate-400 mt-0.5">{r.note}</div> : null}
+                          </div>
+                          <div className="flex flex-col items-end gap-1">
+                            <div className="flex gap-1 flex-wrap justify-end">
+                              {(equipmentsActive||[]).map(e => {
+                                const n = Number(r?.equipment?.[e.id] ?? 0) || 0;
+                                if(n<=0) return null;
+                                return <Pill key={e.id} tone="emerald">{e.abbr||e.name}:{n}</Pill>;
+                              })}
+                            </div>
+                          </div>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      );
+    }
+
+
+
     function WeekTimeGrid({weekKeys, weekStart, weekEnd, roomId, eventsByDate, isLoggedIn, onEdit, busy}){
       const slots = useMemo(() => {
         const a = [];
@@ -2850,6 +3215,171 @@ function EquipmentManager({equipments, setEquipments, isLoggedIn, busy, onSaved,
       );
     }
 
+
+    function YearListView({fy, fyRange, list, rooms, equipmentsActive, isLoggedIn, onEdit, onPickDate}){
+      const roomsActive = useMemo(()=> (rooms||[]).filter(r=>r.active!==false).sort((a,b)=>(a.order??999)-(b.order??999) || (a.name||"").localeCompare(b.name||"")), [rooms]);
+      const buildings = useMemo(()=>{
+        const s = new Set();
+        for(const r of roomsActive){ if(r.building) s.add(r.building); }
+        return Array.from(s).sort((a,b)=>String(a).localeCompare(String(b), 'ja'));
+      }, [roomsActive]);
+
+      const [q, setQ] = useState("");
+      const [filterBuilding, setFilterBuilding] = useState("all");
+      const [filterRoom, setFilterRoom] = useState("all");
+      const [filterMonth, setFilterMonth] = useState("all"); // 1-12 or all
+      const [sortKey, setSortKey] = useState("dateAsc"); // dateAsc/dateDesc/group
+
+      const ql = q.trim().toLowerCase();
+
+      useEffect(() => {
+        if(filterBuilding === 'all') return;
+        if(filterRoom === 'all') return;
+        const rb = roomBuilding(filterRoom);
+        if(rb !== filterBuilding) setFilterRoom('all');
+      }, [filterBuilding]);
+
+      const filtered = useMemo(() => {
+        const out = [];
+        for(const r of (list||[])){
+          if(filterBuilding!=="all" && roomBuilding(r.roomId)!==filterBuilding) continue;
+          if(filterRoom!=="all" && r.roomId!==filterRoom) continue;
+          if(filterMonth!=="all"){
+            const m = (r.date||"").slice(5,7);
+            if(m !== String(filterMonth).padStart(2,'0')) continue;
+          }
+          if(ql){
+            const hay = `${r.date||""} ${roomBuilding(r.roomId)||""} ${roomName(r.roomId)||""} ${r.groupName||""} ${r.note||""}`.toLowerCase();
+            if(!hay.includes(ql)) continue;
+          }
+          out.push(r);
+        }
+
+        out.sort((a,b)=>{
+          if(sortKey==="dateDesc"){
+            return (b.date||"").localeCompare(a.date||"") || (b.startMin||0)-(a.startMin||0);
+          }
+          if(sortKey==="group"){
+            return (a.groupName||"").localeCompare(b.groupName||"", 'ja') || (a.date||"").localeCompare(b.date||"") || (a.startMin||0)-(b.startMin||0);
+          }
+          return (a.date||"").localeCompare(b.date||"") || (a.startMin||0)-(b.startMin||0);
+        });
+
+        return out;
+      }, [list, filterBuilding, filterRoom, filterMonth, ql, sortKey]);
+
+      const equipTotals = useMemo(() => {
+        const t = {};
+        for(const e of (equipmentsActive||[])) t[e.id]=0;
+        for(const r of filtered){
+          const eq = r.equipment || {};
+          for(const e of (equipmentsActive||[])) t[e.id] += (Number(eq[e.id]??0)||0);
+        }
+        return t;
+      }, [filtered, equipmentsActive]);
+
+      return (
+        <div className="mt-4">
+          <div className="rounded-3xl border border-slate-100 bg-slate-50 p-4">
+            <div className="flex items-start justify-between gap-3 flex-wrap">
+              <div>
+                <div className="font-black text-slate-800">年度一覧（{fy}年度 / {fyRange.start}〜{fyRange.end}）</div>
+                <div className="text-xs font-bold text-slate-500 mt-1">※行をタップで編集（ログイン時）。日付をタップで日表示へ。</div>
+              </div>
+              <div className="flex items-center gap-2 flex-wrap no-print">
+                <select className="rounded-2xl border border-slate-200 bg-white px-3 py-2 font-bold text-slate-700" value={filterBuilding} onChange={(e)=>setFilterBuilding(e.target.value)}>
+                  <option value="all">全建物</option>
+                  {buildings.map(b => <option key={b} value={b}>{b}</option>)}
+                </select>
+                <select className="rounded-2xl border border-slate-200 bg-white px-3 py-2 font-bold text-slate-700" value={filterRoom} onChange={(e)=>setFilterRoom(e.target.value)}>
+                  <option value="all">全部屋</option>
+                  {roomsActive.filter(r => filterBuilding==='all' ? true : (r.building===filterBuilding)).map(r => (
+                    <option key={r.id} value={r.id}>{(r.building?`${r.building} / `:"")}{r.name}</option>
+                  ))}
+                </select>
+                <select className="rounded-2xl border border-slate-200 bg-white px-3 py-2 font-bold text-slate-700" value={filterMonth} onChange={(e)=>setFilterMonth(e.target.value)}>
+                  <option value="all">全月</option>
+                  {[1,2,3,4,5,6,7,8,9,10,11,12].map(m => <option key={m} value={m}>{m}月</option>)}
+                </select>
+                <select className="rounded-2xl border border-slate-200 bg-white px-3 py-2 font-bold text-slate-700" value={sortKey} onChange={(e)=>setSortKey(e.target.value)}>
+                  <option value="dateAsc">日付↑</option>
+                  <option value="dateDesc">日付↓</option>
+                  <option value="group">団体名</option>
+                </select>
+                <input
+                  className="rounded-2xl border border-slate-200 bg-white px-3 py-2 font-bold text-slate-700"
+                  placeholder="検索（団体名/備考/部屋）"
+                  value={q}
+                  onChange={(e)=>setQ(e.target.value)}
+                />
+              </div>
+            </div>
+
+            <div className="mt-3 flex items-center justify-between gap-2 flex-wrap">
+              <div className="flex items-center gap-2 flex-wrap">
+                <Pill tone={filtered.length?"sky":"slate"}>{filtered.length}件</Pill>
+                {(equipmentsActive||[]).map(e => {
+                  const n = equipTotals[e.id]||0;
+                  if(n<=0) return null;
+                  return <Pill key={e.id} tone="emerald">{e.abbr||e.name}:{n}</Pill>;
+                })}
+              </div>
+              <div className="text-xs font-bold text-slate-400">フィルタは年度全体に適用</div>
+            </div>
+          </div>
+
+          <div className="mt-4 rounded-3xl border border-slate-100 bg-white overflow-hidden">
+            <div className="overflow-auto max-h-[70vh]">
+              <table className="min-w-full text-sm">
+                <thead className="bg-slate-50 text-slate-600 sticky top-0 z-10">
+                  <tr>
+                    <th className="text-left px-4 py-3 font-black">日付</th>
+                    <th className="text-left px-4 py-3 font-black">時間</th>
+                    <th className="text-left px-4 py-3 font-black">部屋</th>
+                    <th className="text-left px-4 py-3 font-black">団体</th>
+                    <th className="text-left px-4 py-3 font-black">機材</th>
+                    <th className="text-left px-4 py-3 font-black">備考</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filtered.length===0 ? (
+                    <tr><td className="px-4 py-6 text-xs font-bold text-slate-400" colSpan={6}>該当なし</td></tr>
+                  ) : filtered.map(r => (
+                    <tr key={r.id} className={classNames("border-t", isLoggedIn?"hover:bg-slate-50 cursor-pointer":"")}
+                      onClick={()=>{ if(isLoggedIn) onEdit?.(r); }}
+                    >
+                      <td className="px-4 py-3">
+                        <button className="font-black text-slate-800" onClick={(e)=>{ e.stopPropagation(); onPickDate?.(r.date); }}>{r.date}</button>
+                      </td>
+                      <td className="px-4 py-3 font-black text-slate-700">{fmtRange(r.startMin, r.endMin)}</td>
+                      <td className="px-4 py-3">
+                        <div className="font-black text-slate-800">{roomName(r.roomId)}</div>
+                        <div className="text-xs font-bold text-slate-400">{roomBuilding(r.roomId)}</div>
+                      </td>
+                      <td className="px-4 py-3 font-black text-sky-800">{r.groupName||""}</td>
+                      <td className="px-4 py-3">
+                        <div className="flex gap-1 flex-wrap">
+                          {(equipmentsActive||[]).map(e => {
+                            const n = Number(r?.equipment?.[e.id] ?? 0) || 0;
+                            if(n<=0) return null;
+                            return <Pill key={e.id} tone="emerald">{e.abbr||e.name}:{n}</Pill>;
+                          })}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 text-xs font-bold text-slate-500">{r.note||""}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    /**********************
+     * テンプレ設定
+
     /**********************
      * テンプレ設定
      **********************/
@@ -2861,7 +3391,8 @@ function EquipmentManager({equipments, setEquipments, isLoggedIn, busy, onSaved,
       }, [templates]);
 
       return (
-        <div className="mt-4 grid lg:grid-cols-3 gap-4">
+        {yearView==="month" && (
+                <div className="mt-4 grid lg:grid-cols-3 gap-4">
           <div className="rounded-3xl border border-slate-100 bg-white p-4">
             <div className="font-black text-slate-800">現在のテンプレ</div>
             <div className="mt-3 flex gap-2 flex-wrap">
@@ -2963,7 +3494,8 @@ function MonitorBoard({dateKey, rooms, reservations, equipmentsActive}){
   }
 
   return (
-    <div className="mt-4 grid lg:grid-cols-3 gap-4">
+    {yearView==="month" && (
+                <div className="mt-4 grid lg:grid-cols-3 gap-4">
       {usedRooms.map(({room, evts}) => (
         <div key={room.id} className="rounded-3xl border border-slate-100 bg-white p-5">
           <div className="flex items-end justify-between gap-2 flex-wrap">
@@ -3202,12 +3734,12 @@ function PresenceEditor({title, value, onSet, disabled}){
      * CSV Panels
      **********************/
     function CSVExportPanel({ selectedDate, weekStart, weekEnd, reserveView, fyRange, onExport, busy }){
-      const [mode, setMode] = useState(reserveView==="weektime" ? "week" : "day"); // day | week | year | range
+      const [mode, setMode] = useState(["weektime","weeklist"].includes(reserveView) ? "week" : "day"); // day | week | year | range
       const [start, setStart] = useState(weekStart);
       const [end, setEnd] = useState(weekEnd);
 
       useEffect(() => {
-        if(reserveView==="weektime"){
+        if(["weektime","weeklist"].includes(reserveView)){
           setMode("week");
           setStart(weekStart); setEnd(weekEnd);
         }else{
@@ -3288,7 +3820,12 @@ function PresenceEditor({title, value, onSet, disabled}){
     }
 
     // Render
-    ReactDOM.createRoot(document.getElementById("app")).render(<App />);
+    const __rootEl = document.getElementById("app");
+    if(ReactDOM.createRoot){
+      ReactDOM.createRoot(__rootEl).render(<App />);
+    }else{
+      ReactDOM.render(<App />, __rootEl);
+    }
   </script>
 </body>
 </html>
