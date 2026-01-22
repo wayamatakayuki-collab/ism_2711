@@ -3,23 +3,15 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
-  <title>夷隅教育会館 管理（部屋予約・機材・入口モニター）</title>
+  <title>夷隅教育会館 予約管理システム</title>
 
-  <!-- Tailwind -->
   <script src="https://cdn.tailwindcss.com"></script>
-
-  <!-- React (UMD) + Babel -->
-  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-
-  <!-- Firebase (CDN / compat) -->
   <script src="https://www.gstatic.com/firebasejs/12.8.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/12.8.0/firebase-auth-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/12.8.0/firebase-firestore-compat.js"></script>
 
   <style>
-    body { -webkit-tap-highlight-color: transparent; }
+body { -webkit-tap-highlight-color: transparent; }
     .glass { backdrop-filter: blur(10px); }
 
     @media print {
@@ -31,14 +23,93 @@
       .print-tight { font-size: 11px; }
     }
     .print-only { display: none; }
+    .break-avoid { break-inside: avoid; page-break-inside: avoid; }
+    .no-scrollbar::-webkit-scrollbar { display: none; }
+    .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
   </style>
 </head>
 
 <body class="bg-slate-50 text-slate-800">
+  <div id="boot" style="position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#fff;z-index:9999;font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica Neue,Arial,sans-serif;">
+    <div style="max-width:720px;padding:24px;">
+      <div style="font-weight:800;font-size:18px;margin-bottom:8px;">読み込み中…</div>
+      <div id="bootMsg" style="color:#334155;font-size:14px;line-height:1.6;">必要なライブラリを読み込んでいます。</div>
+      <pre id="bootErr" style="display:none;margin-top:12px;white-space:pre-wrap;background:#0f172a;color:#e2e8f0;padding:12px;border-radius:12px;overflow:auto;max-height:45vh;"></pre>
+      <div style="margin-top:10px;color:#64748b;font-size:12px;">※ここにエラーが表示された場合、その内容をそのまま送ってください。</div>
+    </div>
+  </div>
   <div id="app"></div>
 
-  <script type="text/babel">
-    const { useEffect, useMemo, useRef, useState } = React;
+  <script>
+
+  (function(){
+    const boot = document.getElementById("boot");
+    const msg = document.getElementById("bootMsg");
+    const errBox = document.getElementById("bootErr");
+    const setMsg = (t)=>{ try{ msg.textContent = t; }catch(e){} };
+    const showErr = (e)=>{
+      try{
+        errBox.style.display = "block";
+        errBox.textContent = String(e && (e.stack || e.message) || e);
+        setMsg("起動に失敗しました。下のエラー内容をご確認ください。");
+      }catch(_){ }
+    };
+    window.addEventListener("error", (ev)=>{ showErr(ev.error || ev.message); });
+    window.addEventListener("unhandledrejection", (ev)=>{ showErr(ev.reason); });
+
+    function loadScript(url){
+      return new Promise((resolve, reject)=>{
+        const s = document.createElement("script");
+        s.src = url;
+        s.async = true;
+        s.crossOrigin = "anonymous";
+        s.onload = ()=>resolve(url);
+        s.onerror = ()=>reject(new Error("Failed to load: " + url));
+        document.head.appendChild(s);
+      });
+    }
+
+    async function loadWithFallback(name, primary, fallback){
+      setMsg(name + " を読み込み中…");
+      try{
+        return await loadScript(primary);
+      }catch(e1){
+        try{
+          return await loadScript(fallback);
+        }catch(e2){
+          throw new Error(name + " の読み込みに失敗しました。\n" + e1.message + "\n" + e2.message);
+        }
+      }
+    }
+
+    async function bootApp(){
+      try{
+        await loadWithFallback("React", "https://unpkg.com/react@18/umd/react.production.min.js", "https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js");
+        await loadWithFallback("ReactDOM", "https://unpkg.com/react-dom@18/umd/react-dom.production.min.js", "https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js");
+        await loadWithFallback("Babel", "https://unpkg.com/@babel/standalone/babel.min.js", "https://cdn.jsdelivr.net/npm/@babel/standalone/babel.min.js");
+
+        if(!window.React || !window.ReactDOM || !window.Babel){
+          throw new Error("必要なライブラリが読み込めませんでした（React/ReactDOM/Babel）。");
+        }
+
+        setMsg("アプリを起動しています…");
+        const src = document.getElementById("appCode").textContent;
+        const transformed = window.Babel.transform(src, { presets: ["react"] }).code;
+        (new Function(transformed))();
+        // Hide boot overlay
+        boot.style.display = "none";
+      }catch(e){
+        showErr(e);
+      }
+    }
+
+    bootApp();
+  })();
+
+  </script>
+
+  <script id="appCode" type="text/plain">
+const { useEffect, useMemo, useRef, useState } = React;
 
     /**********************
      * 固定設定
@@ -102,11 +173,10 @@
       dt.setDate(dt.getDate()+add);
       return todayKeyLocal(dt);
     };
-    const startOfWeekMonday = (key) => {
+    const startOfWeekSunday = (key) => {
       const dt = parseKeyToDate(key);
-      const dow = dt.getDay();
-      const diff = (dow === 0) ? -6 : (1 - dow);
-      dt.setDate(dt.getDate()+diff);
+      const dow = dt.getDay(); // 0=Sun
+      dt.setDate(dt.getDate() - dow);
       return todayKeyLocal(dt);
     };
     const hhmmToMin = (hhmm) => {
@@ -116,6 +186,140 @@
     const minToHHMM = (min) => `${pad2(Math.floor(min/60))}:${pad2(min%60)}`;
     const overlaps = (aS,aE,bS,bE) => (aS < bE) && (bS < aE);
     const isValidDateKey = (k) => /^\d{4}-\d{2}-\d{2}$/.test(k);
+
+    // --- month helpers
+    const monthKeyFromDateKey = (k) => String(k || "").slice(0,7);
+    const dateKeyFromParts = (y,m,d) => `${y}-${pad2(m)}-${pad2(d)}`;
+    const startOfMonthKey = (monthKey) => `${monthKey}-01`;
+    const endOfMonthKey = (monthKey) => {
+      const parts = String(monthKey || "").split("-");
+      const y = Number(parts[0]);
+      const m = Number(parts[1]);
+      if(!Number.isFinite(y) || !Number.isFinite(m)) return `${monthKey}-28`;
+      const last = new Date(y, m, 0).getDate();
+      return dateKeyFromParts(y, m, last);
+    };
+    const addMonthsKey = (monthKey, add) => {
+      const parts = String(monthKey || "").split("-");
+      const y0 = Number(parts[0]);
+      const m0 = Number(parts[1]);
+      const dt = new Date(Number.isFinite(y0) ? y0 : new Date().getFullYear(), (Number.isFinite(m0)?m0:1)-1, 1);
+      dt.setMonth(dt.getMonth() + Number(add||0));
+      return `${dt.getFullYear()}-${pad2(dt.getMonth()+1)}`;
+    };
+
+    // --- loose parsers (for import)
+    const parseDateLooseToKey = (raw) => {
+      const s = String(raw ?? "").trim();
+      if(!s) return null;
+      if(/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+      if(/^\d{8}$/.test(s)) return `${s.slice(0,4)}-${s.slice(4,6)}-${s.slice(6,8)}`;
+      const m = s.match(/^(\d{4})[\/.\-](\d{1,2})[\/.\-](\d{1,2})$/);
+      if(m){
+        const y = Number(m[1]);
+        const mo = Number(m[2]);
+        const d = Number(m[3]);
+        if(!Number.isFinite(y) || !Number.isFinite(mo) || !Number.isFinite(d)) return null;
+        if(mo<1||mo>12||d<1||d>31) return null;
+        return `${y}-${pad2(mo)}-${pad2(d)}`;
+      }
+      return null;
+    };
+
+    const parseHHMMLoose = (raw) => {
+      const s = String(raw ?? "").trim();
+      if(!s) return null;
+      const m = s.match(/^(\d{1,2})(?::(\d{1,2}))?$/);
+      if(m){
+        const h = Number(m[1]);
+        const mm = m[2] == null ? 0 : Number(m[2]);
+        if(h<0||h>23||mm<0||mm>59) return null;
+        return h*60+mm;
+      }
+      if(/^\d{3,4}$/.test(s)){
+        const n = Number(s);
+        const h = Math.floor(n/100);
+        const mm = n%100;
+        if(h<0||h>23||mm<0||mm>59) return null;
+        return h*60+mm;
+      }
+      return null;
+    };
+
+    // --- monitor settings
+    const MONITOR_SETTINGS_KEY = "ismkaikan_monitor_settings_v1";
+    const MONITOR_VIEW_KEY = "ismkaikan_monitor_view_v1";
+    const DEFAULT_MONITOR_SETTINGS = { startHHMM:"08:00", endHHMM:"20:00", autoPage:true, intervalSec:12, roomsPerPage:"auto" };
+
+    function loadMonitorSettings(){
+      try{
+        const raw = localStorage.getItem(MONITOR_SETTINGS_KEY);
+        if(!raw) return null;
+        const obj = JSON.parse(raw);
+        if(!obj) return null;
+        return {
+          startHHMM: String(obj.startHHMM || DEFAULT_MONITOR_SETTINGS.startHHMM),
+          endHHMM: String(obj.endHHMM || DEFAULT_MONITOR_SETTINGS.endHHMM),
+          autoPage: obj.autoPage !== false,
+          intervalSec: Number(obj.intervalSec || DEFAULT_MONITOR_SETTINGS.intervalSec),
+          roomsPerPage: String(obj.roomsPerPage || DEFAULT_MONITOR_SETTINGS.roomsPerPage),
+        };
+      }catch(e){ return null; }
+    }
+    function saveMonitorSettingsLocal(obj){
+      try{ localStorage.setItem(MONITOR_SETTINGS_KEY, JSON.stringify(obj)); }catch(e){}
+    }
+    function loadMonitorView(){
+      try{ return localStorage.getItem(MONITOR_VIEW_KEY) || "timeline"; }catch(e){ return "timeline"; }
+    }
+    function saveMonitorView(v){
+      try{ localStorage.setItem(MONITOR_VIEW_KEY, String(v||"timeline")); }catch(e){}
+    }
+
+    // --- auto refresh (per device)
+    const AUTO_REFRESH_KEY = "ismkaikan_auto_refresh_v1";
+    const LAST_REV_KEY = "ismkaikan_last_rev_v1";
+
+    function loadAutoRefresh(){
+      try{
+        const raw = localStorage.getItem(AUTO_REFRESH_KEY);
+        if(raw == null) return true; // default ON
+        return raw === "1";
+      }catch(e){ return true; }
+    }
+    function saveAutoRefreshLocal(v){
+      try{ localStorage.setItem(AUTO_REFRESH_KEY, v ? "1" : "0"); }catch(e){}
+    }
+    function loadLastRev(){
+      try{
+        const raw = localStorage.getItem(LAST_REV_KEY);
+        if(raw == null || raw === "") return null;
+        // 差分判定用トークン（文字列）をそのまま利用
+        return String(raw);
+      }catch(e){ return null; }
+    }
+    function saveLastRevLocal(v){
+      try{
+        if(v == null) localStorage.removeItem(LAST_REV_KEY);
+        else localStorage.setItem(LAST_REV_KEY, String(v));
+      }catch(e){}
+    }
+
+
+    // --- deterministic id for import (avoid duplicates)
+    function fnv1a32(str){
+      let h = 0x811c9dc5;
+      for(let i=0;i<str.length;i++){
+        h ^= str.charCodeAt(i);
+        h = (h + ((h<<1) + (h<<4) + (h<<7) + (h<<8) + (h<<24))) >>> 0;
+      }
+      return h >>> 0;
+    }
+    function deterministicIdForReservation(m){
+      const base = `${m.date}|${m.roomId}|${m.startMin}|${m.endMin}|${String(m.groupName||"").trim()}`;
+      return `imp_${fnv1a32(base).toString(36)}`;
+    }
+
 
     function saveCache(key, value){
       try{ localStorage.setItem(key, JSON.stringify({ at: Date.now(), value })); }catch(e){}
@@ -129,7 +333,34 @@
       }catch(e){ return null; }
     }
 
+    function clearCachePrefix(prefix){
+      try{
+        const ks = [];
+        for(let i=0;i<localStorage.length;i++){
+          const k = localStorage.key(i);
+          if(k && String(k).startsWith(prefix)) ks.push(k);
+        }
+        ks.forEach(k => { try{ localStorage.removeItem(k); }catch(e){} });
+      }catch(e){}
+    }
+
     function classNames(...xs){ return xs.filter(Boolean).join(" "); }
+
+    // --- global revision doc (for diff-based auto refresh)
+    // ※ここで更新している revision は、自動更新の差分判定用です。
+    // ※read/write（概算）には加算しません（自動更新の“変化がない時に増えない”挙動を優先）。
+    async function touchRevisionDoc(reason){
+      try{
+        await db.collection("meta").doc("revision").set({
+          rev: firebase.firestore.FieldValue.increment(1),
+          updatedAt: serverTimestamp(),
+          reason: String(reason||"").slice(0, 60),
+        }, { merge:true });
+      }catch(e){
+        console.warn("touchRevisionDoc failed", e);
+      }
+    }
+
 
     /**********************
      * read/write概算（月単位）
@@ -230,6 +461,22 @@
       const [selectedDate, setSelectedDate] = useState(todayKeyLocal());
       const [monitorDate, setMonitorDate] = useState(todayKeyLocal());
 
+      const [monthCursor, setMonthCursor] = useState(() => monthKeyFromDateKey(todayKeyLocal()));
+      const [monthReservations, setMonthReservations] = useState([]);
+      const [monthBusy, setMonthBusy] = useState(false);
+
+      const [monitorSettings, setMonitorSettings] = useState(() => loadMonitorSettings() || DEFAULT_MONITOR_SETTINGS);
+      const [monitorDraft, setMonitorDraft] = useState(() => loadMonitorSettings() || DEFAULT_MONITOR_SETTINGS);
+      const [monitorView, setMonitorView] = useState(() => loadMonitorView());
+
+      const [yearQuery, setYearQuery] = useState("");
+      const [yearRoomFilter, setYearRoomFilter] = useState("all");
+
+      const [importOpen, setImportOpen] = useState(false);
+      const [importText, setImportText] = useState("");
+      const [importPreview, setImportPreview] = useState(null);
+      const [importBusy, setImportBusy] = useState(false);
+
       const [user, setUser] = useState(null);
       const [authReady, setAuthReady] = useState(false);
       const isLoggedIn = !!user;
@@ -243,7 +490,7 @@
       const [dayReservations, setDayReservations] = useState([]);
       const [monitorReservations, setMonitorReservations] = useState([]);
 
-      const [weekStart, setWeekStart] = useState(startOfWeekMonday(selectedDate));
+      const [weekStart, setWeekStart] = useState(startOfWeekSunday(selectedDate));
       const weekKeys = useMemo(()=>Array.from({length:7}, (_,i)=>addDaysKey(weekStart, i)), [weekStart]);
 
       const [weekReservations, setWeekReservations] = useState([]);
@@ -255,6 +502,29 @@
 
       const [ops, setOps] = useState(loadOps());
       useEffect(()=>{ saveOps(ops); }, [ops]);
+
+      // Auto refresh switch (per device)
+      const [autoRefresh, setAutoRefresh] = useState(() => loadAutoRefresh());
+      useEffect(() => { saveAutoRefreshLocal(autoRefresh); }, [autoRefresh]);
+
+      // Diff-based auto refresh info
+      const [lastRev, setLastRev] = useState(() => loadLastRev());
+      const lastRevRef = useRef(lastRev);
+      useEffect(() => { lastRevRef.current = lastRev; saveLastRevLocal(lastRev); }, [lastRev]);
+      const [lastCheckAt, setLastCheckAt] = useState(null);
+      const [lastChangeAt, setLastChangeAt] = useState(null);
+
+
+      // When month cursor changes, load cached month reservations
+      useEffect(() => {
+        const cache = loadCache(`${CACHE_PREFIX}:month:${monthCursor}`);
+        if(cache) setMonthReservations(cache);
+      }, [monthCursor]);
+
+      // Keep draft in sync when saved settings change
+      useEffect(() => {
+        setMonitorDraft(monitorSettings);
+      }, [monitorSettings]);
 
       function bumpReads(n){
         const mk = monthKeyLocal();
@@ -332,7 +602,7 @@
       }, []);
 
       // Sync weekStart with selectedDate
-      useEffect(() => { setWeekStart(startOfWeekMonday(selectedDate)); }, [selectedDate]);
+      useEffect(() => { setWeekStart(startOfWeekSunday(selectedDate)); }, [selectedDate]);
 
       // Load caches on mount
       useEffect(() => {
@@ -340,10 +610,17 @@
         const eCache = loadCache(`${CACHE_PREFIX}:equipments`);
         const dCache = loadCache(`${CACHE_PREFIX}:reservations:${selectedDate}`);
         const mCache = loadCache(`${CACHE_PREFIX}:monitor:${monitorDate}`);
+        const moCache = loadCache(`${CACHE_PREFIX}:month:${monthCursor}`);
         if(rCache?.length) setRooms(rCache);
         if(eCache?.length) setEquipments(eCache);
         if(dCache) setDayReservations(dCache);
         if(mCache) setMonitorReservations(mCache);
+        if(moCache) setMonthReservations(moCache);
+
+        const ms = loadMonitorSettings();
+        if(ms) { setMonitorSettings(ms); setMonitorDraft(ms); }
+        const mv = loadMonitorView();
+        if(mv) setMonitorView(mv);
       }, []);
 
       // When date changes, load cached day reservations
@@ -377,64 +654,52 @@
         setTimeout(()=>setToast(null), 2000);
       }
 
-      async function refreshMasters(opts = {}){
-        const { silent = false } = (opts || {});
-        setBusy(true);
+      async function refreshMasters(opts={}){
+        const silent = !!opts.silent;
+        if(!silent) setBusy(true);
+        let usedFallback = false;
         try{
-          // 閲覧モード（未ログイン）では、権限ルール次第で rooms/equipments が読めず失敗しがち。
-          // その場合でも「キャッシュ or 既定値」を読み込み、赤エラーにしない。
-          if(!isLoggedIn){
-            const rCache = loadCache(`${CACHE_PREFIX}:rooms`);
-            const eCache = loadCache(`${CACHE_PREFIX}:equipments`);
-            setRooms((rCache?.length) ? rCache : DEFAULT_ROOMS);
-            setEquipments((eCache?.length) ? eCache : DEFAULT_EQUIPMENTS);
-            if(!silent){
-              setToast({ type:"ok", msg:"マスタを読み込みました（閲覧モード：キャッシュ/既定値）" });
+          async function getList(col, fallback, cacheKey){
+            try{
+              const snap = await db.collection(col).get();
+              bumpReads(snap.size);
+              const list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+              if(list.length){
+                saveCache(`${CACHE_PREFIX}:${cacheKey}`, list);
+                return list;
+              }
+              saveCache(`${CACHE_PREFIX}:${cacheKey}`, fallback);
+              return fallback;
+            }catch(err){
+              usedFallback = true;
+              const cached = loadCache(`${CACHE_PREFIX}:${cacheKey}`);
+              if(cached && Array.isArray(cached) && cached.length) return cached;
+              return fallback;
             }
-            return;
           }
 
-          const rs = await db.collection("rooms").get();
-          bumpReads(rs.size);
-          const roomsList = rs.docs.map(d => ({ id: d.id, ...d.data() }));
-          const roomsFinal = roomsList.length ? roomsList : DEFAULT_ROOMS;
-          setRooms(roomsFinal);
-          saveCache(`${CACHE_PREFIX}:rooms`, roomsFinal);
-
-          const es = await db.collection("equipments").get();
-          bumpReads(es.size);
-          const eqList = es.docs.map(d => ({ id: d.id, ...d.data() }));
-          const eqFinal = eqList.length ? eqList : DEFAULT_EQUIPMENTS;
-          setEquipments(eqFinal);
-          saveCache(`${CACHE_PREFIX}:equipments`, eqFinal);
+          const roomsList = await getList("rooms", DEFAULT_ROOMS, "rooms");
+          const eqList = await getList("equipments", DEFAULT_EQUIPMENTS, "equipments");
+          setRooms(roomsList);
+          setEquipments(eqList);
 
           if(!silent){
-            setToast({ type:"ok", msg:"マスタを更新しました" });
+            setToast({ type:"ok", msg: usedFallback ? "マスタ更新：キャッシュ/初期値を使用しました" : "マスタを更新しました" });
           }
         }catch(err){
           console.error(err);
-
-          // サーバー取得に失敗しても、キャッシュ/既定値で継続表示
-          const rCache = loadCache(`${CACHE_PREFIX}:rooms`);
-          const eCache = loadCache(`${CACHE_PREFIX}:equipments`);
-          setRooms((rCache?.length) ? rCache : DEFAULT_ROOMS);
-          setEquipments((eCache?.length) ? eCache : DEFAULT_EQUIPMENTS);
-
-          if(!silent){
-            const code = err?.code || "";
-            const hint = (code === "permission-denied" || code === "unauthenticated")
-              ? "ログインするとサーバーのマスタを更新できます"
-              : "通信/権限の可能性：キャッシュ/既定値を表示しました";
-            setToast({ type:"ok", msg:`マスタを読み込みました（${hint}）` });
-          }
+          if(!silent) setToast({ type:"ng", msg:"マスタ更新に失敗しました" });
         }finally{
-          setBusy(false);
-          if(!silent) setTimeout(()=>setToast(null), 2200);
+          if(!silent){
+            setBusy(false);
+            setTimeout(()=>setToast(null), 2200);
+          }
         }
       }
 
-      async function refreshDay(dateKey){
-        setBusy(true);
+      async function refreshDay(dateKey, opts={}){
+        const silent = !!opts.silent;
+        if(!silent) setBusy(true);
         try{
           const snap = await db.collection("reservations").where("date","==",dateKey).get();
           bumpReads(snap.size);
@@ -442,18 +707,23 @@
             .sort((a,b)=>(String(a.roomId||"").localeCompare(String(b.roomId||"")) || Number(a.startMin||0)-Number(b.startMin||0)));
           setDayReservations(list);
           saveCache(`${CACHE_PREFIX}:reservations:${dateKey}`, list);
-          setToast({ type:"ok", msg:"更新しました" });
+          if(!silent){
+            setToast({ type:"ok", msg:"更新しました" });
+          }
         }catch(err){
           console.error(err);
-          setToast({ type:"ng", msg:"更新に失敗しました" });
+          if(!silent) setToast({ type:"ng", msg:"更新に失敗しました" });
         }finally{
-          setBusy(false);
-          setTimeout(()=>setToast(null), 2000);
+          if(!silent){
+            setBusy(false);
+            setTimeout(()=>setToast(null), 2000);
+          }
         }
       }
 
-      async function refreshMonitor(dateKey){
-        setBusy(true);
+      async function refreshMonitor(dateKey, opts={}){
+        const silent = !!opts.silent;
+        if(!silent) setBusy(true);
         try{
           const snap = await db.collection("reservations").where("date","==",dateKey).get();
           bumpReads(snap.size);
@@ -461,18 +731,23 @@
             .sort((a,b)=>(String(a.roomId||"").localeCompare(String(b.roomId||"")) || Number(a.startMin||0)-Number(b.startMin||0)));
           setMonitorReservations(list);
           saveCache(`${CACHE_PREFIX}:monitor:${dateKey}`, list);
-          setToast({ type:"ok", msg:"モニターを更新しました" });
+          if(!silent){
+            setToast({ type:"ok", msg:"モニターを更新しました" });
+          }
         }catch(err){
           console.error(err);
-          setToast({ type:"ng", msg:"更新に失敗しました" });
+          if(!silent) setToast({ type:"ng", msg:"更新に失敗しました" });
         }finally{
-          setBusy(false);
-          setTimeout(()=>setToast(null), 2000);
+          if(!silent){
+            setBusy(false);
+            setTimeout(()=>setToast(null), 2000);
+          }
         }
       }
 
-      async function refreshWeek(startKey){
-        setBusy(true);
+      async function refreshWeek(startKey, opts={}){
+        const silent = !!opts.silent;
+        if(!silent) setBusy(true);
         try{
           const endKey = addDaysKey(startKey, 6);
           const snap = await db.collection("reservations")
@@ -484,18 +759,53 @@
             .sort((a,b)=>(String(a.date||"").localeCompare(String(b.date||"")) || String(a.roomId||"").localeCompare(String(b.roomId||"")) || Number(a.startMin||0)-Number(b.startMin||0)));
           setWeekReservations(list);
           saveCache(`${CACHE_PREFIX}:week:${startKey}`, list);
-          setToast({ type:"ok", msg:"週を更新しました" });
+          if(!silent){
+            setToast({ type:"ok", msg:"週を更新しました" });
+          }
         }catch(err){
           console.error(err);
-          setToast({ type:"ng", msg:"週の更新に失敗しました" });
+          if(!silent) setToast({ type:"ng", msg:"週の更新に失敗しました" });
         }finally{
-          setBusy(false);
-          setTimeout(()=>setToast(null), 2000);
+          if(!silent){
+            setBusy(false);
+            setTimeout(()=>setToast(null), 2000);
+          }
         }
       }
 
-      async function refreshYear(){
-        setYearBusy(true);
+      async function refreshMonth(monthKey, opts={}){
+        const silent = !!opts.silent;
+        if(!silent) setMonthBusy(true);
+        try{
+          const start = startOfMonthKey(monthKey);
+          const end = endOfMonthKey(monthKey);
+          const snap = await db.collection("reservations")
+            .where("date", ">=", start)
+            .where("date", "<=", end)
+            .get();
+          bumpReads(snap.size);
+          const list = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+            .sort((a,b)=>(String(a.date||"").localeCompare(String(b.date||"")) || Number(a.startMin||0)-Number(b.startMin||0) || String(a.roomId||"").localeCompare(String(b.roomId||""))));
+          setMonthReservations(list);
+          saveCache(`${CACHE_PREFIX}:month:${monthKey}`, list);
+          if(!silent){
+            setToast({ type:"ok", msg:"月予定を更新しました" });
+            setTimeout(()=>setToast(null), 1800);
+          }
+        }catch(err){
+          console.error(err);
+          if(!silent){
+            setToast({ type:"ng", msg:"月予定の更新に失敗しました" });
+            setTimeout(()=>setToast(null), 2400);
+          }
+        }finally{
+          if(!silent) setMonthBusy(false);
+        }
+      }
+
+      async function refreshYear(opts={}){
+        const silent = !!opts.silent;
+        if(!silent) setYearBusy(true);
         try{
           // 4月〜翌3月（selectedDate基準の年度）
           const fy = (()=>{
@@ -515,12 +825,141 @@
           const list = snap.docs.map(d => ({ id: d.id, ...d.data() }))
             .sort((a,b)=>(String(a.date||"").localeCompare(String(b.date||"")) || String(a.roomId||"").localeCompare(String(b.roomId||"")) || Number(a.startMin||0)-Number(b.startMin||0)));
           setYearReservations(list);
+          saveCache(`${CACHE_PREFIX}:year:${fy}`, list);
+          if(!silent){
+            setToast({ type:"ok", msg:"年度一覧を更新しました" });
+            setTimeout(()=>setToast(null), 1800);
+          }
         }catch(err){
           console.error(err);
-          setToast({ type:"ng", msg:"年度一覧の取得に失敗しました" });
-          setTimeout(()=>setToast(null), 2400);
+          if(!silent){
+            setToast({ type:"ng", msg:"年度一覧の取得に失敗しました" });
+            setTimeout(()=>setToast(null), 2400);
+          }
         }finally{
-          setYearBusy(false);
+          if(!silent) setYearBusy(false);
+        }
+      }
+
+      // --- smart refresh (diff-based) using meta/revision
+      async function refreshAllSilent(){
+        await refreshMasters({ silent:true });
+        await refreshDay(selectedDate, { silent:true });
+        await refreshMonitor(monitorDate, { silent:true });
+        await refreshWeek(weekStart, { silent:true });
+        await refreshMonth(monthCursor, { silent:true });
+        await refreshYear({ silent:true });
+      }
+
+      async function smartRefresh(opts={}){
+        const silent = !!opts.silent;
+        const scope = String(opts.scope || 'current');
+        if(!authReady) return false;
+        if(busy || monthBusy || yearBusy || importBusy) return false;
+        try{
+          setLastCheckAt(Date.now());
+
+          async function probeLatestUpdatedMsSafe(col){
+            try{
+              const qs = await db.collection(col).orderBy('updatedAt','desc').limit(1).get();
+              if(qs.empty) return 0;
+              const d = qs.docs[0].data() || {};
+              const u = d.updatedAt;
+              const ms = (u && typeof u.toMillis === 'function') ? u.toMillis() : (typeof u === 'number' ? u : 0);
+              return Number(ms || 0);
+            }catch(err){
+              const code = err?.code || '';
+              const msg = String(err?.message || '');
+              if(code === 'permission-denied' || /permission[- ]denied/i.test(msg)) return null;
+              throw err;
+            }
+          }
+
+          let token = null;
+          let changeMs = null;
+
+          // まずは meta/revision を試す（最小の差分判定）
+          try{
+            const snap = await db.collection('meta').doc('revision').get();
+            const rev = snap.exists ? Number((snap.data()||{}).rev || 0) : 0;
+            const updatedAt = snap.exists ? (snap.data()||{}).updatedAt : null;
+            const updatedMs = (updatedAt && typeof updatedAt.toMillis === 'function') ? updatedAt.toMillis() : null;
+            token = `rev:${rev}`;
+            changeMs = updatedMs || null;
+          }catch(e){
+            // meta が読めない場合は、読めるコレクションの最新更新時刻で差分判定（permission-denied は無視）
+            const wantRes = (scope !== 'masters');
+            const wantMasters = (scope === 'masters' || scope === 'all');
+            const rMs = wantRes ? (await probeLatestUpdatedMsSafe('reservations')) : null;
+            const roomsMs = wantMasters ? (await probeLatestUpdatedMsSafe('rooms')) : null;
+            const eqMs = wantMasters ? (await probeLatestUpdatedMsSafe('equipments')) : null;
+            const rr = Number(rMs||0);
+            const rm = Number(roomsMs||0);
+            const em = Number(eqMs||0);
+            token = `probe:${rr}:${rm}:${em}`;
+            changeMs = Math.max(rr, rm, em);
+          }
+
+          const prev = (lastRevRef.current == null) ? null : String(lastRevRef.current);
+
+          async function refreshByScope(){
+            if(scope === 'all'){
+              await refreshAllSilent();
+            }else if(scope === 'masters'){
+              await refreshMasters({ silent:true });
+            }else if(scope === 'monitor'){
+              await refreshMonitor(monitorDate, { silent:true });
+            }else if(scope === 'week'){
+              await refreshWeek(weekStart, { silent:true });
+            }else if(scope === 'month'){
+              await refreshMonth(monthCursor, { silent:true });
+            }else if(scope === 'year'){
+              await refreshYear({ silent:true });
+            }else{
+              await refreshDay(selectedDate, { silent:true });
+            }
+          }
+
+          // 初回：自動更新は基準設定のみ。手動更新は実取得する。
+          if(prev == null){
+            setLastRev(token);
+            if(changeMs) setLastChangeAt(changeMs);
+            if(!silent){
+              await refreshByScope();
+              setToast({ type:'ok', msg:'更新しました' });
+              setTimeout(()=>setToast(null), 1500);
+              return true;
+            }
+            return false;
+          }
+
+          if(token === prev){
+            if(!silent){
+              setToast({ type:'ok', msg:'変更なし（取得しません）' });
+              setTimeout(()=>setToast(null), 1200);
+            }
+            return false;
+          }
+
+          setLastRev(token);
+          if(changeMs) setLastChangeAt(changeMs);
+
+          await refreshByScope();
+
+          if(!silent){
+            setToast({ type:'ok', msg:'更新しました' });
+            setTimeout(()=>setToast(null), 1500);
+          }
+          return true;
+        }catch(err){
+          console.error(err);
+          if(!silent){
+            const detail = err?.code || err?.message || '';
+            const s = String(detail || '').replace(/\s+/g,' ').slice(0, 60);
+            setToast({ type:'ng', msg: '更新に失敗しました' + (s ? `（${s}）` : '') });
+            setTimeout(()=>setToast(null), 2800);
+          }
+          return false;
         }
       }
 
@@ -538,6 +977,24 @@
         });
         setEditorOpen(true);
       }
+
+      function openNewForDate(dk){
+        const firstRoom = roomsActive[0]?.id || DEFAULT_ROOMS[0].id;
+        const dateKey = dk || selectedDate;
+        setSelectedDate(dateKey);
+        setEditModel({
+          id: null,
+          date: dateKey,
+          roomId: firstRoom,
+          startMin: hhmmToMin("09:00"),
+          endMin: hhmmToMin("10:00"),
+          groupName: "",
+          note: "",
+          equipment: blankEquipment({}),
+        });
+        setEditorOpen(true);
+      }
+
 
       function openEdit(r){
         setEditModel({
@@ -642,14 +1099,17 @@
             bumpWrites(1);
           }
 
+          await touchRevisionDoc("reservation");
+
           setEditorOpen(false);
           setEditModel(null);
 
           // 画面に応じて更新
-          await refreshDay(selectedDate);
-          if(tab === "monitor") await refreshMonitor(monitorDate);
-          if(tab === "week") await refreshWeek(weekStart);
-          if(tab === "year") await refreshYear();
+          await refreshDay(selectedDate, { silent:true });
+          if(tab === "monitor") await refreshMonitor(monitorDate, { silent:true });
+          if(tab === "week") await refreshWeek(weekStart, { silent:true });
+          if(tab === "month") await refreshMonth(monthCursor, { silent:true });
+          if(tab === "year") await refreshYear({ silent:true });
 
           setToast({ type:"ok", msg:"保存しました" });
           setTimeout(()=>setToast(null), 1500);
@@ -669,10 +1129,12 @@
         try{
           await db.collection("reservations").doc(id).delete();
           bumpWrites(1);
-          await refreshDay(selectedDate);
-          if(tab === "monitor") await refreshMonitor(monitorDate);
-          if(tab === "week") await refreshWeek(weekStart);
-          if(tab === "year") await refreshYear();
+          await touchRevisionDoc("reservation_delete");
+          await refreshDay(selectedDate, { silent:true });
+          if(tab === "monitor") await refreshMonitor(monitorDate, { silent:true });
+          if(tab === "week") await refreshWeek(weekStart, { silent:true });
+          if(tab === "month") await refreshMonth(monthCursor, { silent:true });
+          if(tab === "year") await refreshYear({ silent:true });
         }catch(err){
           console.error(err);
           setToast({ type:"ng", msg:"削除に失敗しました" });
@@ -682,28 +1144,84 @@
         }
       }
 
-      function doPrint(){
+async function deleteAllReservations(){
+        if(!isLoggedIn) return;
+        const ok1 = confirm('【危険】全ての予定（予約）を削除します。よろしいですか？');
+        if(!ok1) return;
+        const ok2 = confirm('最終確認：本当に全削除しますか？（元に戻せません）');
+        if(!ok2) return;
+        setBusy(true);
+        try{
+          let total = 0;
+          while(true){
+            const snap = await db.collection('reservations').limit(420).get();
+            bumpReads(snap.size);
+            if(snap.empty) break;
+            const batch = db.batch();
+            snap.docs.forEach(doc => batch.delete(doc.ref));
+            await batch.commit();
+            bumpWrites(snap.size);
+            total += snap.size;
+            if(snap.size < 420) break;
+          }
+                    await touchRevisionDoc("reservation_delete_all");
+// clear local caches related to reservations
+          clearCachePrefix(`${CACHE_PREFIX}:reservations:`);
+          clearCachePrefix(`${CACHE_PREFIX}:monitor:`);
+          clearCachePrefix(`${CACHE_PREFIX}:week:`);
+          clearCachePrefix(`${CACHE_PREFIX}:month:`);
+          setDayReservations([]);
+          setMonitorReservations([]);
+          setWeekReservations([]);
+          setMonthReservations([]);
+          setYearReservations([]);
+          setToast({ type:'ok', msg:`全予定を削除しました（${total}件）` });
+          setTimeout(()=>setToast(null), 3200);
+        }catch(err){
+          console.error(err);
+          setToast({ type:'ng', msg:'全削除に失敗しました' });
+          setTimeout(()=>setToast(null), 3200);
+        }finally{
+          setBusy(false);
+        }
+      }
+
+            function doPrint(){
         setTimeout(()=>window.print(), 120);
       }
 
-      // Auto refresh master once auth ready（初回は静かに：未ログインでも赤トーストを出さない）
+      // Auto refresh (diff-based) every minute (silent)
+      const autoRefreshingRef = useRef(false);
       useEffect(() => {
         if(!authReady) return;
-        refreshMasters({ silent:true });
-      }, [authReady]);
+        if(!autoRefresh) return;
 
-      // Auto refresh day reservations on first load
-      useEffect(() => {
-        if(!authReady) return;
-        refreshDay(selectedDate);
-      }, [authReady]);
+        const tick = async () => {
+          if(autoRefreshingRef.current) return;
+          if(busy || monthBusy || yearBusy || importBusy) return;
+          autoRefreshingRef.current = true;
+          try{
+            await smartRefresh({ silent:true, scope:'all' });
+          }catch(e){
+            console.error(e);
+          }finally{
+            autoRefreshingRef.current = false;
+          }
+        };
+
+        const id = setInterval(tick, 60*1000);
+        tick();
+        return () => clearInterval(id);
+      }, [authReady, autoRefresh, selectedDate, monitorDate, weekStart, monthCursor, busy, monthBusy, yearBusy, importBusy]);
+
+
 
       const fyInfo = useMemo(() => {
         const d = parseKeyToDate(selectedDate);
         const y = d.getFullYear();
         const m = d.getMonth()+1;
         const fy = (m>=4) ? y : (y-1);
-        return { fy, start: `${fy}-04-01`, end: `${fy+1}-03-31` };
+        return { fy, start: `${fy}-04-01`, end: `${fy+1}-03-31`, label: `${fy}年度` };
       }, [selectedDate]);
 
       return (
@@ -711,25 +1229,27 @@
           <div className="max-w-7xl mx-auto px-4 pt-5">
             <div className="flex items-center justify-between gap-3 flex-wrap">
               <div>
-                <div className="text-2xl font-black text-slate-900">夷隅教育会館 管理</div>
-                <div className="text-xs font-bold text-slate-400 mt-1">部屋予約 / 入口モニター / 週・年度一覧 / 部屋・機材マスタ編集</div>
+                <div className="text-2xl font-black text-slate-900">夷隅教育会館 予約管理システム</div>
+                <div className="text-xs font-bold text-slate-400 mt-1">部屋予約 / 掲示板 / 週・年度一覧 / 部屋・機材マスタ編集</div>
               </div>
 
               <div className="flex items-center gap-2">
                 <button
                   className={classNames("rounded-2xl px-4 py-2 font-black border shadow-sm",
-                    busy ? "bg-slate-100 text-slate-400 border-slate-200" : "bg-sky-600 text-white border-sky-600")}
-                  disabled={busy}
+                    (busy || monthBusy || yearBusy || importBusy) ? "bg-slate-100 text-slate-400 border-slate-200" : "bg-sky-600 text-white border-sky-600")}
+                  disabled={busy || monthBusy || yearBusy || importBusy}
                   onClick={() => {
-                    if(tab === "monitor") return refreshMonitor(monitorDate);
-                    if(tab === "week") return refreshWeek(weekStart);
-                    if(tab === "year") return refreshYear();
-                    return refreshDay(selectedDate);
+                    if(tab === 'rooms' || tab === 'equip') return smartRefresh({ scope:'masters' });
+                    if(tab === 'monitor') return smartRefresh({ scope:'monitor' });
+                    if(tab === 'week') return smartRefresh({ scope:'week' });
+                    if(tab === 'month') return smartRefresh({ scope:'month' });
+                    if(tab === 'year') return smartRefresh({ scope:'year' });
+                    return smartRefresh({ scope:'day' });
                   }}
                 >
                   更新
                 </button>
-	                <button className="rounded-2xl px-4 py-2 font-black bg-white border border-slate-200 text-slate-700" onClick={() => refreshMasters()} disabled={busy}>
+                <button className="rounded-2xl px-4 py-2 font-black bg-white border border-slate-200 text-slate-700" onClick={()=>smartRefresh({ scope:'masters' })} disabled={busy}>
                   マスタ更新
                 </button>
                 <button className="rounded-2xl px-4 py-2 font-black bg-white border border-slate-200 text-slate-700" onClick={doPrint}>
@@ -760,14 +1280,15 @@
           </div>
 
           <div className="max-w-7xl mx-auto px-4 mt-3">
-            <div className="grid grid-cols-2 md:grid-cols-8 gap-2 no-print">
+            <div className="grid grid-cols-3 md:grid-cols-9 gap-2 no-print">
               <TabButton active={tab==="dashboard"} onClick={()=>setTab("dashboard")}>全体</TabButton>
-              <TabButton active={tab==="monitor"} onClick={()=>{ setTab("monitor"); setMonitorDate(todayKeyLocal()); }}>入口モニター</TabButton>
-              <TabButton active={tab==="day"} onClick={()=>setTab("day")}>日予約</TabButton>
-              <TabButton active={tab==="week"} onClick={()=>{ setTab("week"); }}>週一覧</TabButton>
-              <TabButton active={tab==="year"} onClick={()=>{ setTab("year"); }}>年度一覧</TabButton>
-              <TabButton active={tab==="equip"} onClick={()=>setTab("equip")}>機材</TabButton>
-              <TabButton active={tab==="rooms"} onClick={()=>setTab("rooms")}>部屋</TabButton>
+              <TabButton active={tab==="monitor"} onClick={()=>{ setTab("monitor"); setMonitorDate(todayKeyLocal()); }}>掲示板</TabButton>
+              <TabButton active={tab==="day"} onClick={()=>setTab("day")}>日予定</TabButton>
+              <TabButton active={tab==="week"} onClick={()=>{ setTab("week"); }}>週予定</TabButton>
+              <TabButton active={tab==="month"} onClick={()=>{ setMonthCursor(monthKeyFromDateKey(selectedDate)); setTab("month"); }}>月予定</TabButton>
+              <TabButton active={tab==="year"} onClick={()=>{ setTab("year"); }}>年間予定</TabButton>
+              <TabButton active={tab==="equip"} onClick={()=>setTab("equip")}>機材管理</TabButton>
+              <TabButton active={tab==="rooms"} onClick={()=>setTab("rooms")}>部屋マスタ</TabButton>
               <TabButton active={tab==="help"} onClick={()=>setTab("help")}>設定</TabButton>
             </div>
           </div>
@@ -816,10 +1337,10 @@
                           日予約へ
                         </button>
                         <button className="px-3 py-2 rounded-2xl bg-white border border-slate-200 font-black text-slate-700" onClick={()=>{ setTab("week"); }}>
-                          週一覧へ
+                          週予定へ
                         </button>
                         <button className="px-3 py-2 rounded-2xl bg-white border border-slate-200 font-black text-slate-700" onClick={()=>{ setTab("year"); }}>
-                          年度一覧へ
+                          年間予定へ
                         </button>
                       </div>
                     </div>
@@ -833,7 +1354,7 @@
                       <button className="px-3 py-2 rounded-2xl bg-white border border-slate-200 font-black text-slate-700" onClick={()=>setSelectedDate(addDaysKey(todayKeyLocal(),2))}>明後日</button>
                     </div>
                     <input type="date" className="rounded-2xl border border-slate-200 bg-white px-3 py-2 font-black text-slate-700" value={selectedDate} onChange={(e)=>setSelectedDate(e.target.value)} />
-                    <button className="px-3 py-2 rounded-2xl bg-white border border-slate-200 font-black text-slate-700" onClick={()=>refreshDay(selectedDate)} disabled={busy}>この日を更新</button>
+                    <button className="px-3 py-2 rounded-2xl bg-white border border-slate-200 font-black text-slate-700" onClick={()=>smartRefresh({ scope:'day' })} disabled={busy}>この日を更新</button>
                   </div>
 
                   <div className="mt-4 text-sm font-black text-slate-700">部屋ごとの予約（{selectedDate}）</div>
@@ -897,7 +1418,7 @@
 
                 <div className="mt-4 flex items-center gap-2 flex-wrap">
                   <input type="date" className="rounded-2xl border border-slate-200 bg-white px-3 py-2 font-black text-slate-700" value={selectedDate} onChange={(e)=>setSelectedDate(e.target.value)} />
-                  <button className="px-3 py-2 rounded-2xl bg-white border border-slate-200 font-black text-slate-700" onClick={()=>refreshDay(selectedDate)} disabled={busy}>
+                  <button className="px-3 py-2 rounded-2xl bg-white border border-slate-200 font-black text-slate-700" onClick={()=>smartRefresh({ scope:'day' })} disabled={busy}>
                     この日を更新
                   </button>
                   <div className="text-xs font-bold text-slate-400">※表示が古い場合は「更新」</div>
@@ -956,13 +1477,19 @@
               <Card printCard>
                 <SectionTitle
                   icon="🖥️"
-                  title="入口モニター"
-                  sub="今日/明日/明後日をワンタップ切替。使う部屋だけ大きく表示。"
+                  title="掲示板"
+                  sub="1日分を全画面で見やすく（スクロール最小化）"
                   right={
                     <div className="flex items-center gap-2 flex-wrap no-print">
                       <button className="rounded-2xl px-4 py-2 font-black bg-white border border-slate-200 text-slate-700" onClick={()=>setMonitorDate(todayKeyLocal())}>今日</button>
                       <button className="rounded-2xl px-4 py-2 font-black bg-white border border-slate-200 text-slate-700" onClick={()=>setMonitorDate(addDaysKey(todayKeyLocal(),1))}>明日</button>
                       <button className="rounded-2xl px-4 py-2 font-black bg-white border border-slate-200 text-slate-700" onClick={()=>setMonitorDate(addDaysKey(todayKeyLocal(),2))}>明後日</button>
+
+                      <div className="flex items-center gap-2 rounded-2xl bg-white border border-slate-200 px-2 py-1">
+                        <button className={classNames("px-3 py-2 rounded-2xl font-black", monitorView==="timeline" ? "bg-slate-900 text-white" : "bg-white text-slate-700")} onClick={()=>{ setMonitorView("timeline"); saveMonitorView("timeline"); }}>タイムライン</button>
+                        <button className={classNames("px-3 py-2 rounded-2xl font-black", monitorView==="cards" ? "bg-slate-900 text-white" : "bg-white text-slate-700")} onClick={()=>{ setMonitorView("cards"); saveMonitorView("cards"); }}>カード</button>
+                      </div>
+
                       <button
                         className="rounded-2xl px-4 py-2 font-black bg-slate-900 text-white border border-slate-900"
                         onClick={() => {
@@ -979,27 +1506,42 @@
                 <div className="mt-4 flex items-center gap-2 flex-wrap">
                   <div className="text-sm font-black text-slate-800">表示日</div>
                   <input type="date" className="rounded-2xl border border-slate-200 bg-white px-3 py-2 font-black text-slate-700" value={monitorDate} onChange={(e)=>setMonitorDate(e.target.value)} />
-                  <button className="px-3 py-2 rounded-2xl bg-white border border-slate-200 font-black text-slate-700" onClick={()=>refreshMonitor(monitorDate)} disabled={busy}>
+                  <button className="px-3 py-2 rounded-2xl bg-white border border-slate-200 font-black text-slate-700" onClick={()=>smartRefresh({ scope:'monitor' })} disabled={busy}>
                     この日を更新
                   </button>
-                  <div className="text-xs font-bold text-slate-400">※最新にするには「更新」</div>
+                  <div className="text-xs font-bold text-slate-400">時間軸：{monitorSettings.startHHMM}〜{monitorSettings.endHHMM}（変更は「設定」）</div>
                 </div>
 
-                <MonitorBoard
-                  dateKey={monitorDate}
-                  rooms={roomsActive}
-                  equipmentsActive={equipmentsActive}
-                  reservations={monitorReservations}
-                />
+                {monitorView === "timeline" ? (
+                  <MonitorTimelineBoard
+                    dateKey={monitorDate}
+                    rooms={roomsActive}
+                    reservations={monitorReservations}
+                    equipmentsActive={equipmentsActive}
+                    startHHMM={monitorSettings.startHHMM}
+                    endHHMM={monitorSettings.endHHMM}
+                    autoPage={monitorSettings.autoPage}
+                    intervalSec={monitorSettings.intervalSec}
+                    roomsPerPage={monitorSettings.roomsPerPage}
+                  />
+                ) : (
+                  <MonitorBoard
+                    dateKey={monitorDate}
+                    rooms={roomsActive}
+                    equipmentsActive={equipmentsActive}
+                    reservations={monitorReservations}
+                  />
+                )}
               </Card>
             )}
+
 
             {tab === "week" && (
               <Card printCard>
                 <SectionTitle
                   icon="🧾"
-                  title="週の予定（一覧）"
-                  sub={`週：${weekStart}〜${addDaysKey(weekStart,6)}（月曜始まり）`}
+                  title="週予定"
+                  sub={`週：${weekStart}〜${addDaysKey(weekStart,6)}（日曜始まり）`}
                   right={
                     <div className="flex items-center gap-2 flex-wrap no-print">
                       <button className="rounded-2xl px-4 py-2 font-black bg-white border border-slate-200 text-slate-700" onClick={()=>{ const prev=addDaysKey(weekStart,-7); setWeekStart(prev); }}>
@@ -1008,54 +1550,82 @@
                       <button className="rounded-2xl px-4 py-2 font-black bg-white border border-slate-200 text-slate-700" onClick={()=>{ const next=addDaysKey(weekStart,7); setWeekStart(next); }}>
                         次週 ▶
                       </button>
-                      <button className="rounded-2xl px-4 py-2 font-black bg-white border border-slate-200 text-slate-700" onClick={()=>refreshWeek(weekStart)} disabled={busy}>
+                      {isLoggedIn ? (
+                        <button className="rounded-2xl px-4 py-2 font-black bg-emerald-600 text-white border border-emerald-600"
+                          onClick={()=>{ const end=addDaysKey(weekStart,6); const dk=(selectedDate>=weekStart && selectedDate<=end)?selectedDate:weekStart; openNewForDate(dk); }}
+                        >
+                          + 予約追加
+                        </button>
+                      ) : null}
+                      <button className={classNames("rounded-2xl px-4 py-2 font-black border",
+                        busy ? "bg-slate-100 text-slate-400 border-slate-200" : "bg-white text-slate-700 border-slate-200")}
+                        onClick={()=>smartRefresh({ scope:'week' })} disabled={busy}
+                      >
                         この週を更新
                       </button>
                     </div>
                   }
                 />
 
-                <div className="mt-4 grid lg:grid-cols-3 gap-3">
-                  {weekKeys.map((dk, idx) => {
-                    const list = (weekReservations||[]).filter(r => r.date === dk).slice().sort((a,b)=>Number(a.startMin||0)-Number(b.startMin||0));
-                    const names = ["月","火","水","木","金","土","日"];
-                    return (
-                      <div key={dk} className="rounded-3xl border border-slate-100 bg-white p-4">
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <div className="text-xs font-black text-slate-400">{names[idx]}</div>
-                            <div className="font-black text-slate-800">{dk}</div>
-                          </div>
-                          <Pill tone="slate">{list.length}件</Pill>
-                        </div>
-                        <div className="mt-3 space-y-2">
-                          {list.length===0 ? (
-                            <div className="text-xs font-bold text-slate-400">予約なし</div>
-                          ) : list.map(r => (
-                            <div key={r.id} className="p-3 rounded-2xl bg-slate-50 border border-slate-100">
-                              <div className="font-black text-slate-800">{minToHHMM(r.startMin||0)}–{minToHHMM(r.endMin||0)} / {roomName(r.roomId)}</div>
-                              <div className="text-xs font-bold text-slate-600 mt-1">{r.groupName}</div>
-                              <div className="mt-2 flex flex-wrap gap-2">
-                                {equipmentsActive.map(e => (Number(r?.equipment?.[e.id]||0)>0) ? (
-                                  <Pill key={e.id} tone="sky">{(e.abbr||e.name)} {Number(r.equipment[e.id]||0)}</Pill>
-                                ) : null)}
-                              </div>
-                              {isLoggedIn ? (
-                                <div className="mt-2 flex gap-2 no-print">
-                                  <button className="px-3 py-2 rounded-2xl bg-white border border-slate-200 font-black text-slate-700" onClick={()=>openEdit(r)}>
-                                    編集
-                                  </button>
-                                </div>
-                              ) : null}
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
+                <RangeList
+                  startKey={weekStart}
+                  endKey={addDaysKey(weekStart,6)}
+                  reservations={weekReservations}
+                  roomsMap={roomsMap}
+                  equipmentsActive={equipmentsActive}
+                  isLoggedIn={isLoggedIn}
+                  onPickDate={(dk)=>{ setSelectedDate(dk); setTab("day"); }}
+                  onEdit={(r)=>openEdit(r)}
+                  showMonthHeaders={false}
+                  maxHeight="70vh"
+                />
 
-                <div className="mt-3 text-xs font-bold text-slate-400">※週一覧は「この週を更新」でFirestoreから取得（概算readに反映）</div>
+                <div className="mt-3 text-xs font-bold text-slate-400">※週予定は「この週を更新」でFirestoreから取得（概算readに反映）</div>
+              </Card>
+            )}
+
+            {tab === "month" && (
+              <Card printCard>
+                <SectionTitle
+                  icon="🗓️"
+                  title="月予定"
+                  sub={`月：${monthCursor}`}
+                  right={
+                    <div className="flex items-center gap-2 flex-wrap no-print">
+                      <button className="rounded-2xl px-4 py-2 font-black bg-white border border-slate-200 text-slate-700" onClick={()=>{ const prev = addMonthsKey(monthCursor,-1); setMonthCursor(prev); }}>
+                        ◀ 前月
+                      </button>
+                      <button className="rounded-2xl px-4 py-2 font-black bg-white border border-slate-200 text-slate-700" onClick={()=>{ const next = addMonthsKey(monthCursor,1); setMonthCursor(next); }}>
+                        次月 ▶
+                      </button>
+                      {isLoggedIn ? (
+                        <button className="rounded-2xl px-4 py-2 font-black bg-emerald-600 text-white border border-emerald-600"
+                          onClick={()=>{ const dk = (String(selectedDate||"").slice(0,7)===monthCursor) ? selectedDate : `${monthCursor}-01`; openNewForDate(dk); }}
+                        >
+                          + 予約追加
+                        </button>
+                      ) : null}
+                      <button className={classNames("rounded-2xl px-4 py-2 font-black border",
+                        monthBusy ? "bg-slate-100 text-slate-400 border-slate-200" : "bg-white text-slate-700 border-slate-200")}
+                        onClick={()=>smartRefresh({ scope:'month' })} disabled={monthBusy}
+                      >
+                        この月を更新
+                      </button>
+                      <button className="rounded-2xl px-4 py-2 font-black bg-slate-900 text-white border border-slate-900" onClick={()=>{ setMonthCursor(monthKeyFromDateKey(todayKeyLocal())); }}>
+                        今月
+                      </button>
+                    </div>
+                  }
+                />
+
+                <div className="mt-3 text-xs font-bold text-slate-400">※月予定は「この月を更新」でFirestoreから取得（概算readに反映）</div>
+
+                <MonthList
+                  monthKey={monthCursor}
+                  reservations={monthReservations}
+                  roomsMap={roomsMap}
+                  onPickDate={(dk)=>{ setSelectedDate(dk); setTab("day"); }}
+                />
               </Card>
             )}
 
@@ -1063,55 +1633,85 @@
               <Card printCard>
                 <SectionTitle
                   icon="🗓️"
-                  title="年間の予定（一覧）"
-                  sub={`年度：${fyInfo.fy}（${fyInfo.start}〜${fyInfo.end}）`}
+                  title="年間予定（年度）"
+                  sub={`年度：${fyInfo.fy}（${fyInfo.start}〜${fyInfo.end}） / 4月始まり`}
                   right={
                     <div className="flex items-center gap-2 flex-wrap no-print">
+                      {isLoggedIn ? (
+                        <button className="rounded-2xl px-4 py-2 font-black bg-slate-900 text-white border border-slate-900" onClick={()=>setImportOpen(true)} disabled={importBusy||yearBusy}>
+                          年間一括インポート
+                        </button>
+                      ) : null}
+                      {isLoggedIn ? (
+                        <button className="rounded-2xl px-4 py-2 font-black bg-rose-600 text-white border border-rose-600" onClick={deleteAllReservations} disabled={busy||importBusy||yearBusy}>
+                          全予定削除
+                        </button>
+                      ) : null}
                       <button className={classNames("rounded-2xl px-4 py-2 font-black border shadow-sm",
                         yearBusy ? "bg-slate-100 text-slate-400 border-slate-200" : "bg-white text-slate-700 border-slate-200")}
                         disabled={yearBusy}
-                        onClick={refreshYear}
+                        onClick={()=>smartRefresh({ scope:'year' })}
                       >
-                        年度一覧を更新
+                        年間を更新
                       </button>
                     </div>
                   }
                 />
 
-                <div className="mt-3 text-xs font-bold text-slate-400">※取得件数が多いとreadが増えます。必要なときに「年度一覧を更新」してください。</div>
+                <div className="mt-3 grid lg:grid-cols-3 gap-3">
+                  <div className="rounded-3xl border border-slate-100 bg-white p-4 lg:col-span-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="text-sm font-black text-slate-800">絞り込み</div>
+                      <input
+                        className="flex-1 min-w-[220px] rounded-2xl border border-slate-200 bg-white px-3 py-2 font-black text-slate-700"
+                        value={yearQuery}
+                        onChange={(e)=>setYearQuery(e.target.value)}
+                        placeholder="団体名 / メモ（部分一致）"
+                      />
+                      <select
+                        className="rounded-2xl border border-slate-200 bg-white px-3 py-2 font-black text-slate-700"
+                        value={yearRoomFilter}
+                        onChange={(e)=>setYearRoomFilter(e.target.value)}
+                      >
+                        <option value="all">全部屋</option>
+                        {roomsActive.map(r => (
+                          <option key={r.id} value={r.id}>{r.building} / {r.name}</option>
+                        ))}
+                      </select>
+                      <Pill tone="slate">{yearReservations.length}件</Pill>
+                    </div>
 
-                <div className="mt-4 rounded-3xl border border-slate-100 bg-white p-3">
-                  <div className="text-xs font-black text-slate-500">結果：{yearReservations.length} 件</div>
-                  <div className="mt-2 space-y-2 max-h-[65vh] overflow-auto">
-                    {yearReservations.length===0 ? (
-                      <div className="text-sm font-bold text-slate-400 p-3">年度一覧がここに出ます（更新を押してください）</div>
-                    ) : yearReservations.map(r => (
-                      <div key={r.id} className="p-3 rounded-2xl bg-slate-50 border border-slate-100">
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="min-w-0">
-                            <div className="font-black text-slate-900">{r.date} {minToHHMM(r.startMin||0)}–{minToHHMM(r.endMin||0)} / {r.groupName}</div>
-                            <div className="text-xs font-bold text-slate-600 mt-1">{roomBuilding(r.roomId)} / {roomName(r.roomId)}</div>
-                            <div className="mt-2 flex flex-wrap gap-2">
-                              {equipmentsActive.map(e => (Number(r?.equipment?.[e.id]||0)>0) ? (
-                                <Pill key={e.id} tone="sky">{(e.abbr||e.name)} {Number(r.equipment[e.id]||0)}</Pill>
-                              ) : null)}
-                              {r.note ? <Pill tone="slate">メモ</Pill> : null}
-                            </div>
-                            {r.note ? <div className="text-xs font-bold text-slate-500 mt-2">{r.note}</div> : null}
-                          </div>
-                          <div className="shrink-0 flex gap-2 no-print">
-                            <button className="px-3 py-2 rounded-2xl bg-white border border-slate-200 font-black text-slate-700" onClick={()=>{ setSelectedDate(r.date); setTab("day"); }}>
-                              日へ
-                            </button>
-                            {isLoggedIn ? (
-                              <button className="px-3 py-2 rounded-2xl bg-white border border-slate-200 font-black text-slate-700" onClick={()=>openEdit(r)}>
-                                編集
-                              </button>
-                            ) : null}
-                          </div>
-                        </div>
-                      </div>
-                    ))}
+                    <div className="mt-3 text-xs font-bold text-slate-400">※「年間を更新」で年度内（4月〜翌3月）をまとめて取得します。件数が多いとreadが増えます。</div>
+
+                    <YearGroupedList
+                      fyInfo={fyInfo}
+                      roomsMap={roomsMap}
+                      equipmentsActive={equipmentsActive}
+                      reservations={yearReservations}
+                      query={yearQuery}
+                      roomFilter={yearRoomFilter}
+                      isLoggedIn={isLoggedIn}
+                      onEdit={(r)=>openEdit(r)}
+                      onJumpDay={(dk)=>{ setSelectedDate(dk); setTab("day"); }}
+                    />
+                  </div>
+
+                  <div className="rounded-3xl border border-slate-100 bg-slate-50 p-4">
+                    <div className="font-black text-slate-800">月へジャンプ</div>
+                    <div className="mt-2 grid grid-cols-3 gap-2">
+                      {Array.from({length:12}, (_,i)=>i+1).map(mm => {
+                        const mk = (mm>=4) ? `${fyInfo.fy}-${pad2(mm)}` : `${fyInfo.fy+1}-${pad2(mm)}`;
+                        return (
+                          <button key={mk} type="button" onClick={()=>{ const el=document.getElementById(`ym-${mk}`); if(el) el.scrollIntoView({behavior:'smooth', block:'start'}); }} className="px-3 py-2 rounded-2xl bg-white border border-slate-200 font-black text-slate-700 text-center">
+                            {mk.slice(5)}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <div className="mt-4 text-xs font-bold text-slate-500 space-y-1">
+                      <div>・「年間一括インポート」は、Excel/スプレッドシートから貼り付け→プレビュー→一括登録。</div>
+                      <div>・インポート/編集はログイン中のみ。</div>
+                    </div>
                   </div>
                 </div>
               </Card>
@@ -1190,30 +1790,134 @@
                 <SectionTitle
                   icon="⚙️"
                   title="設定"
-                  sub="read/writeの考え方（確認）と、運用ヒント"
+                  sub="掲示板の時間軸 / read-write（概算） / 運用"
                 />
 
                 <div className="mt-4 grid md:grid-cols-2 gap-3">
+                  <div className="rounded-3xl border border-slate-100 bg-white p-4">
+                    <div className="font-black text-slate-800">掲示板設定</div>
+                    <div className="text-xs font-bold text-slate-500 mt-2">※変更・保存は <span className="text-slate-900">ログイン中のみ</span> できます（表示は全員OK）</div>
+
+                    <div className="mt-3 grid grid-cols-2 gap-2">
+                      <div>
+                        <div className="text-xs font-black text-slate-600 mb-1">開始</div>
+                        <input type="time" className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 font-black text-slate-700" value={monitorDraft.startHHMM} onChange={(e)=>setMonitorDraft(d=>({ ...d, startHHMM:e.target.value }))} disabled={!isLoggedIn||busy} />
+                      </div>
+                      <div>
+                        <div className="text-xs font-black text-slate-600 mb-1">終了</div>
+                        <input type="time" className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 font-black text-slate-700" value={monitorDraft.endHHMM} onChange={(e)=>setMonitorDraft(d=>({ ...d, endHHMM:e.target.value }))} disabled={!isLoggedIn||busy} />
+                      </div>
+                    </div>
+
+                    <div className="mt-3 grid grid-cols-2 gap-2">
+                      <div className="rounded-3xl border border-slate-100 bg-slate-50 p-3">
+                        <div className="text-xs font-black text-slate-600">自動ページ送り</div>
+                        <label className="mt-2 flex items-center gap-2 font-black text-slate-700">
+                          <input type="checkbox" checked={!!monitorDraft.autoPage} onChange={(e)=>setMonitorDraft(d=>({ ...d, autoPage:e.target.checked }))} disabled={!isLoggedIn||busy} />
+                          ON
+                        </label>
+                        <div className="text-[11px] font-bold text-slate-400 mt-1">部屋が多い時に自動で切替</div>
+                      </div>
+                      <div className="rounded-3xl border border-slate-100 bg-slate-50 p-3">
+                        <div className="text-xs font-black text-slate-600">切替間隔（秒）</div>
+                        <input type="number" min="5" max="120" className="mt-2 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 font-black text-slate-700" value={Number(monitorDraft.intervalSec||12)} onChange={(e)=>setMonitorDraft(d=>({ ...d, intervalSec:Number(e.target.value||12) }))} disabled={!isLoggedIn||busy} />
+                        <div className="text-[11px] font-bold text-slate-400 mt-1">5〜120</div>
+                      </div>
+                    </div>
+
+                    <div className="mt-3">
+                      <div className="text-xs font-black text-slate-600 mb-1">1画面に表示する部屋数</div>
+                      <select className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 font-black text-slate-700" value={String(monitorDraft.roomsPerPage||"auto")} onChange={(e)=>setMonitorDraft(d=>({ ...d, roomsPerPage:e.target.value }))} disabled={!isLoggedIn||busy}>
+                        <option value="auto">自動（画面サイズ）</option>
+                        <option value="6">6</option>
+                        <option value="8">8</option>
+                        <option value="10">10</option>
+                        <option value="12">12</option>
+                        <option value="16">16</option>
+                      </select>
+                    </div>
+
+                    <div className="mt-3 flex gap-2">
+                      <button
+                        className={classNames("w-full rounded-2xl px-4 py-3 font-black shadow-sm border",
+                          (!isLoggedIn||busy) ? "bg-slate-100 text-slate-400 border-slate-200" : "bg-emerald-600 text-white border-emerald-600")}
+                        disabled={!isLoggedIn||busy}
+                        onClick={() => {
+                          const s = hhmmToMin(monitorDraft.startHHMM||"08:00");
+                          const e = hhmmToMin(monitorDraft.endHHMM||"20:00");
+                          if(!(e > s)){
+                            setToast({ type:"ng", msg:"終了は開始より後にしてください" });
+                            setTimeout(()=>setToast(null), 2200);
+                            return;
+                          }
+                          const next = {
+                            startHHMM: monitorDraft.startHHMM || "08:00",
+                            endHHMM: monitorDraft.endHHMM || "20:00",
+                            autoPage: !!monitorDraft.autoPage,
+                            intervalSec: Math.max(5, Math.min(120, Number(monitorDraft.intervalSec||12))),
+                            roomsPerPage: String(monitorDraft.roomsPerPage||"auto"),
+                          };
+                          setMonitorSettings(next);
+                          saveMonitorSettingsLocal(next);
+                          setToast({ type:"ok", msg:"掲示板設定を保存しました" });
+                          setTimeout(()=>setToast(null), 1800);
+                        }}
+                      >
+                        保存
+                      </button>
+                      <button
+                        className={classNames("rounded-2xl px-4 py-3 font-black shadow-sm border",
+                          busy ? "bg-slate-100 text-slate-400 border-slate-200" : "bg-white text-slate-700 border-slate-200")}
+                        onClick={() => setMonitorDraft(monitorSettings)}
+                        disabled={busy}
+                      >
+                        戻す
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="space-y-3">
+                  <div className="rounded-3xl border border-slate-100 bg-white p-4">
+                    <div className="font-black text-slate-800">自動更新（1分）</div>
+                    <div className="text-xs font-bold text-slate-500 mt-2">差分判定：変更があった時だけ取得します（変化がなければ read/write（概算）は増えません）</div>
+
+                    <label className="mt-3 flex items-center justify-between gap-3 rounded-3xl border border-slate-100 bg-slate-50 p-3">
+                      <div>
+                        <div className="text-xs font-black text-slate-600">自動更新</div>
+                        <div className="text-sm font-bold text-slate-800 mt-1">{autoRefresh ? 'ON' : 'OFF'}</div>
+                      </div>
+                      <input type="checkbox" checked={!!autoRefresh} onChange={(e)=>setAutoRefresh(e.target.checked)} />
+                    </label>
+
+                    <div className="mt-3 text-[11px] font-bold text-slate-500 space-y-1">
+                      <div>最終チェック：{lastCheckAt ? new Date(lastCheckAt).toLocaleString('ja-JP') : '—'}</div>
+                      <div>最終更新検知：{lastChangeAt ? new Date(lastChangeAt).toLocaleString('ja-JP') : '—'}</div>
+                      <div>revision：{(lastRev==null) ? '—' : String(lastRev)}</div>
+                    </div>
+
+                    <div className="mt-3 text-[11px] font-bold text-slate-400">※差分判定のために1ドキュメントだけ取得します（概算readには加算していません）。</div>
+                  </div>
+
                   <div className="rounded-3xl border border-slate-100 bg-slate-50 p-4">
                     <div className="font-black text-slate-800">read/write カウント（概算）</div>
                     <div className="text-sm font-bold text-slate-700 mt-2 space-y-1">
                       <div>・Firestoreの取得(get)で read を、保存(set/add/delete)で write を<strong>概算</strong>加算します。</div>
-                      <div>・添付のSchool Calと同じ方式（ローカル集計）です。</div>
-                      <div>・マスタ更新/週・年度一覧の更新は read が増えます（必要時だけ更新推奨）。</div>
+                      <div>・WAYAMAのSchool Calと同じ方式（ローカル集計）です。</div>
+                      <div>・マスタ更新/週・月・年度の更新は read が増えます（必要時だけ更新推奨）。</div>
                     </div>
                     <div className="mt-3">
                       <button className="px-4 py-2 rounded-2xl bg-white border border-slate-200 font-black text-slate-700" onClick={resetOps}>今月のread/writeをリセット</button>
                     </div>
-                  </div>
 
-                  <div className="rounded-3xl border border-slate-100 bg-slate-50 p-4">
-                    <div className="font-black text-slate-800">運用ヒント</div>
+                    <div className="mt-4 font-black text-slate-800">運用ヒント</div>
                     <ul className="mt-2 text-sm font-bold text-slate-700 list-disc pl-5 space-y-1">
-                      <li>入口モニターは日付を独立管理（今日/明日/明後日切替）。</li>
+                      <li>掲示板は「タイムライン」推奨（部屋が多いと自動でページ送りします）。</li>
                       <li>部屋/機材は削除ではなく「非表示」で運用できます。</li>
-                      <li>週一覧・年度一覧は「更新」でまとめて取得（必要時のみ）。</li>
+                      <li>週・月・年度は「更新」でまとめて取得（必要時のみ）。</li>
+                      <li>インポートは同一内容なら同じIDで上書き（重複しにくい方式）。</li>
                     </ul>
                   </div>
+                </div>
                 </div>
               </Card>
             )}
@@ -1238,6 +1942,32 @@
             ) : null}
           </Modal>
 
+          <Modal
+            open={importOpen}
+            onClose={()=>{ if(!importBusy) setImportOpen(false); }}
+            title="年間一括インポート"
+          >
+            <ImportModal
+              open={importOpen}
+              fyInfo={fyInfo}
+              roomsActive={roomsActive}
+              roomsMap={roomsMap}
+              equipmentsActive={equipmentsActive}
+              isLoggedIn={isLoggedIn}
+              importText={importText}
+              setImportText={setImportText}
+              importPreview={importPreview}
+              setImportPreview={setImportPreview}
+              importBusy={importBusy}
+              setImportBusy={setImportBusy}
+              bumpWrites={bumpWrites}
+              bumpReads={bumpReads}
+              setToast={setToast}
+              onDone={async ()=>{ setImportOpen(false); await refreshYear({ silent:true }); }}
+            />
+          </Modal>
+
+
           {toast ? (
             <div className={classNames(
               "fixed left-1/2 -translate-x-1/2 bottom-4 z-50 px-4 py-3 rounded-3xl shadow-lg border font-black no-print",
@@ -1249,7 +1979,7 @@
 
           <div className="fixed inset-x-0 bottom-0 z-30 bg-white/85 glass border-t border-slate-100 no-print">
             <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between gap-3">
-              <div className="text-xs font-bold text-slate-500">※「更新」でFirestoreから読み込み（オフライン時はキャッシュ表示）</div>
+              <div className="text-xs font-bold text-slate-500">©️2026 Takayuki WAYAMA</div>
               <div className="text-xs font-bold text-slate-400">共通ID：{SHARED_LOGIN_CODE}</div>
             </div>
           </div>
@@ -1432,7 +2162,208 @@
     /**********************
      * Monitor Board
      **********************/
-    function MonitorBoard({dateKey, rooms, reservations, equipmentsActive}){
+    
+
+    /**********************
+     * Year Grouped List (FY)
+     **********************/
+function YearGroupedList({fyInfo, roomsMap, equipmentsActive, reservations, query, roomFilter, isLoggedIn, onEdit, onJumpDay}){
+      const q = (query||"").trim().toLowerCase();
+      const filtered = useMemo(() => {
+        return (reservations||[]).filter(r => {
+          if(roomFilter !== "all" && r.roomId !== roomFilter) return false;
+          if(!q) return true;
+          const t = `${r.groupName||""} ${r.note||""}`.toLowerCase();
+          return t.includes(q);
+        });
+      }, [reservations, q, roomFilter]);
+
+      const months = useMemo(() => {
+        const order = [];
+        for(let m=4;m<=12;m++) order.push(`${fyInfo.fy}-${pad2(m)}`);
+        for(let m=1;m<=3;m++) order.push(`${fyInfo.fy+1}-${pad2(m)}`);
+        const by = {};
+        for(const mk of order) by[mk] = [];
+        for(const r of filtered){
+          const mk = String(r.date||"").slice(0,7);
+          if(!by[mk]) by[mk] = [];
+          by[mk].push(r);
+        }
+        for(const mk of Object.keys(by)){
+          by[mk].sort((a,b)=>(String(a.date||"").localeCompare(String(b.date||"")) || Number(a.startMin||0)-Number(b.startMin||0) || String(a.roomId||"").localeCompare(String(b.roomId||""))));
+        }
+        return { order, by };
+      }, [filtered, fyInfo]);
+
+      return (
+        <RangeList
+          startKey={fyInfo.start}
+          endKey={fyInfo.end}
+          reservations={filtered}
+          roomsMap={roomsMap}
+          equipmentsActive={equipmentsActive}
+          isLoggedIn={isLoggedIn}
+          onPickDate={(dk)=>onJumpDay?.(dk)}
+          onEdit={(r)=>onEdit?.(r)}
+          showMonthHeaders={true}
+          maxHeight="65vh"
+        />
+      );
+    }
+
+    /**********************
+     * Monitor Timeline Board
+     **********************/
+function MonitorTimelineBoard({dateKey, rooms, reservations, equipmentsActive, startHHMM, endHHMM, autoPage, intervalSec, roomsPerPage}){
+      const startMin = hhmmToMin(startHHMM||"08:00");
+      const endMin = hhmmToMin(endHHMM||"20:00");
+      const range = Math.max(60, endMin - startMin);
+
+      const byRoom = useMemo(() => {
+        const m = {};
+        for(const r of rooms) m[r.id] = [];
+        for(const rr of reservations||[]){
+          if(!m[rr.roomId]) m[rr.roomId] = [];
+          m[rr.roomId].push(rr);
+        }
+        for(const k of Object.keys(m)) m[k].sort((a,b)=>Number(a.startMin||0)-Number(b.startMin||0));
+        return m;
+      }, [rooms, reservations]);
+
+      const usedRooms = useMemo(() => rooms.filter(r => (byRoom[r.id]||[]).length > 0), [rooms, byRoom]);
+
+      const wrapRef = useRef(null);
+      const [autoPerPage, setAutoPerPage] = useState(8);
+      useEffect(() => {
+        if(String(roomsPerPage||"auto") !== "auto") return;
+        const calc = () => {
+          const h = wrapRef.current?.clientHeight || 600;
+          const per = Math.max(4, Math.min(16, Math.floor((h - 64) / 74)));
+          setAutoPerPage(per);
+        };
+        calc();
+        window.addEventListener("resize", calc);
+        return () => window.removeEventListener("resize", calc);
+      }, [roomsPerPage]);
+
+      const perPage = (String(roomsPerPage||"auto") === "auto") ? autoPerPage : Math.max(1, Number(roomsPerPage||autoPerPage));
+      const pages = Math.max(1, Math.ceil(usedRooms.length / perPage));
+      const [page, setPage] = useState(0);
+
+      useEffect(() => { setPage(0); }, [dateKey, perPage, usedRooms.length]);
+
+      useEffect(() => {
+        if(!autoPage || pages<=1) return;
+        const ms = Math.max(5, Number(intervalSec||12)) * 1000;
+        const t = setInterval(() => setPage(p => (p+1)%pages), ms);
+        return () => clearInterval(t);
+      }, [autoPage, intervalSec, pages]);
+
+      const pageRooms = usedRooms.slice(page*perPage, (page+1)*perPage);
+
+      const hourTicks = useMemo(() => {
+        const ticks = [];
+        const startH = Math.ceil(startMin/60);
+        const endH = Math.floor(endMin/60);
+        for(let h=startH; h<=endH; h++){
+          const t = h*60;
+          if(t>=startMin && t<=endMin) ticks.push(t);
+        }
+        return ticks;
+      }, [startMin, endMin]);
+
+      const leftW = 220;
+
+      return (
+        <div className="mt-4 rounded-3xl border border-slate-100 bg-white overflow-hidden" style={{height:"calc(100vh - 280px)", minHeight:480}}>
+          <div className="h-full flex flex-col" ref={wrapRef}>
+            <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100 bg-slate-50">
+              <div className="font-black text-slate-800">{dateKey} / 予約のある部屋のみ表示</div>
+              <div className="flex items-center gap-2">
+                {pages>1 ? (
+                  <div className="text-xs font-black text-slate-600">{page+1}/{pages}</div>
+                ) : null}
+                {pages>1 ? (
+                  <>
+                    <button className="px-3 py-2 rounded-2xl bg-white border border-slate-200 font-black text-slate-700" onClick={()=>setPage(p=> (p-1+pages)%pages)}>前</button>
+                    <button className="px-3 py-2 rounded-2xl bg-white border border-slate-200 font-black text-slate-700" onClick={()=>setPage(p=> (p+1)%pages)}>次</button>
+                  </>
+                ) : null}
+              </div>
+            </div>
+
+            {usedRooms.length===0 ? (
+              <div className="p-6 text-sm font-bold text-slate-500">この日は予約がありません。</div>
+            ) : (
+              <div className="flex-1 overflow-hidden">
+                <div className="h-full grid" style={{gridTemplateColumns:`${leftW}px 1fr`}}>
+                  <div className="px-3 py-2 border-b border-slate-100 bg-white font-black text-slate-600">部屋</div>
+                  <div className="px-3 py-2 border-b border-slate-100 bg-white relative">
+                    <div className="relative h-8">
+                      {hourTicks.map(t => {
+                        const x = ((t-startMin)/range)*100;
+                        return (
+                          <div key={t} className="absolute top-0 bottom-0" style={{left:`${x}%`}}>
+                            <div className="w-px h-full bg-slate-200"></div>
+                            <div className="text-[10px] font-black text-slate-500 -translate-x-1/2 mt-1">{minToHHMM(t)}</div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {pageRooms.map(room => {
+                    const list = byRoom[room.id] || [];
+                    return (
+                      <React.Fragment key={room.id}>
+                        <div className="px-3 py-3 border-b border-slate-100 bg-white">
+                          <div className="text-xs font-black text-slate-500">{room.building}</div>
+                          <div className="font-black text-slate-800">{room.name}</div>
+                        </div>
+                        <div className="px-3 py-2 border-b border-slate-100 bg-white relative">
+                          <div className="relative h-14 rounded-2xl bg-slate-50 border border-slate-100 overflow-hidden">
+                            {hourTicks.map(t => {
+                              const x = ((t-startMin)/range)*100;
+                              return <div key={t} className="absolute top-0 bottom-0" style={{left:`${x}%`}}><div className="w-px h-full bg-slate-200"></div></div>;
+                            })}
+                            {list.map(r => {
+                              const s = Math.max(startMin, Number(r.startMin||0));
+                              const e = Math.min(endMin, Number(r.endMin||0));
+                              const left = ((s-startMin)/range)*100;
+                              const width = Math.max(1, ((e-s)/range)*100);
+                              const eqBadges = equipmentsActive
+                                .filter(e0 => Number(r?.equipment?.[e0.id]||0)>0)
+                                .slice(0,3)
+                                .map(e0 => `${e0.abbr||e0.name}${Number(r.equipment[e0.id]||0)}`)
+                                .join(" ");
+                              return (
+                                <div
+                                  key={r.id}
+                                  className="absolute top-2 bottom-2 rounded-xl bg-sky-600/90 text-white px-2 flex items-center"
+                                  style={{left:`${left}%`, width:`${width}%`}}
+                                  title={`${minToHHMM(r.startMin||0)}-${minToHHMM(r.endMin||0)} ${r.groupName}`}
+                                >
+                                  <div className="min-w-0">
+                                    <div className="text-[11px] font-black truncate">{r.groupName}</div>
+                                    <div className="text-[10px] font-black text-white/90 truncate">{minToHHMM(r.startMin||0)}–{minToHHMM(r.endMin||0)}{eqBadges ? ` / ${eqBadges}` : ""}</div>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      </React.Fragment>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+function MonitorBoard({dateKey, rooms, reservations, equipmentsActive}){
       const byRoom = useMemo(() => {
         const m = {};
         for(const r of rooms) m[r.id] = [];
@@ -1490,6 +2421,527 @@
       );
     }
 
+
+
+    /**********************
+     * Month (vertical list)
+     **********************/
+    function MonthList({monthKey, reservations, roomsMap, onPickDate}){
+      const [y, m] = String(monthKey||'').split('-').map(Number);
+      const days = new Date(y, m, 0).getDate();
+      const byDate = {};
+      (reservations||[]).forEach(r => {
+        const dk = r.date;
+        if(!byDate[dk]) byDate[dk] = [];
+        byDate[dk].push(r);
+      });
+      for(const k of Object.keys(byDate)){
+        byDate[k].sort((a,b)=>Number(a.startMin||0)-Number(b.startMin||0) || String(a.roomId||'').localeCompare(String(b.roomId||'')));
+      }
+      const w = ['日','月','火','水','木','金','土'];
+
+      const roomLabel = (rid) => {
+        const r = roomsMap?.[rid];
+        if(!r) return rid;
+        const b = (r.building||'').trim();
+        return b ? `${b}/${r.name}` : r.name;
+      };
+
+      return (
+        <div className="mt-4">
+          <div className="rounded-3xl border border-slate-100 bg-white overflow-hidden">
+            <div className="max-h-[70vh] overflow-auto">
+              {Array.from({length:days}, (_,i)=>i+1).map(d => {
+                const dk = `${y}-${pad2(m)}-${pad2(d)}`;
+                const dow = parseKeyToDate(dk).getDay();
+                const list = byDate[dk] || [];
+                return (
+                  <div key={dk} className="border-b border-slate-100 last:border-b-0">
+                    <button
+                      className="w-full text-left px-4 py-3 bg-slate-50 hover:bg-slate-100 flex items-center justify-between gap-3"
+                      onClick={()=>onPickDate?.(dk)}
+                      type="button"
+                    >
+                      <div className="font-black text-slate-800">{d}日（{w[dow]}）</div>
+                      <div className="text-xs font-black text-slate-500">{list.length}件</div>
+                    </button>
+
+                    <div className="px-4 py-3 space-y-2">
+                      {list.length===0 ? (
+                        <div className="text-xs font-bold text-slate-400">予定なし</div>
+                      ) : list.map(r => (
+                        <div key={r.id} className="p-3 rounded-2xl bg-white border border-slate-200">
+                          <div className="font-black text-slate-800">{minToHHMM(r.startMin||0)}–{minToHHMM(r.endMin||0)} / {roomLabel(r.roomId)}</div>
+                          <div className="text-sm font-black text-slate-700 mt-1 break-words">{r.groupName}</div>
+                          {r.note ? <div className="text-xs font-bold text-slate-500 mt-1 break-words">{r.note}</div> : null}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    /**********************
+     * Range (vertical list like MonthList)
+     **********************/
+    function RangeList({startKey, endKey, reservations, roomsMap, equipmentsActive=[], isLoggedIn=false, onPickDate, onEdit, showMonthHeaders=false, maxHeight="70vh"}){
+      const byDate = {};
+      (reservations||[]).forEach(r => {
+        const dk = r.date;
+        if(!byDate[dk]) byDate[dk] = [];
+        byDate[dk].push(r);
+      });
+      for(const k of Object.keys(byDate)){
+        byDate[k].sort((a,b)=>Number(a.startMin||0)-Number(b.startMin||0) || String(a.roomId||"").localeCompare(String(b.roomId||"")));
+      }
+
+      const w = ["日","月","火","水","木","金","土"];
+
+      const roomLabel = (rid) => {
+        const r = roomsMap?.[rid];
+        if(!r) return rid;
+        const b = (r.building||"").trim();
+        return b ? `${b}/${r.name}` : r.name;
+      };
+
+      const days = [];
+      let dk = startKey;
+      let guard = 0;
+      while(dk && endKey && dk <= endKey && guard < 400){
+        days.push(dk);
+        dk = addDaysKey(dk, 1);
+        guard++;
+      }
+
+      return (
+        <div className="mt-4">
+          <div className="rounded-3xl border border-slate-100 bg-white overflow-hidden">
+            <div className="overflow-auto" style={{maxHeight}}>
+              {days.map((dayKey) => {
+                const d = parseKeyToDate(dayKey);
+                const list = byDate[dayKey] || [];
+                const mk = String(dayKey).slice(0,7);
+                const isFirstOfMonth = String(dayKey).endsWith("-01");
+                return (
+                  <div key={dayKey} className="border-b border-slate-100 last:border-b-0">
+                    {showMonthHeaders && isFirstOfMonth ? (
+                      <div id={`ym-${mk}`} className="px-4 py-3 bg-slate-900 text-white font-black">{mk}</div>
+                    ) : null}
+
+                    <button
+                      className="w-full text-left px-4 py-3 bg-slate-50 hover:bg-slate-100 flex items-center justify-between gap-3"
+                      onClick={()=>onPickDate?.(dayKey)}
+                      type="button"
+                    >
+                      <div className="font-black text-slate-800">{Number(String(dayKey).slice(8))}日（{w[d.getDay()]}）</div>
+                      <div className="text-xs font-black text-slate-500">{list.length}件</div>
+                    </button>
+
+                    <div className="px-4 py-3 space-y-2">
+                      {list.length===0 ? (
+                        <div className="text-xs font-bold text-slate-400">予定なし</div>
+                      ) : list.map(r => (
+                        <div key={r.id} className="p-3 rounded-2xl bg-white border border-slate-200">
+                          <div className="font-black text-slate-800">{minToHHMM(r.startMin||0)}–{minToHHMM(r.endMin||0)} / {roomLabel(r.roomId)}</div>
+                          <div className="text-sm font-black text-slate-700 mt-1 break-words">{r.groupName}</div>
+                          {r.note ? <div className="text-xs font-bold text-slate-500 mt-1 break-words">{r.note}</div> : null}
+                          {equipmentsActive?.length ? (
+                            <div className="mt-2 flex flex-wrap gap-1">
+                              {equipmentsActive.map(e => (Number(r?.equipment?.[e.id]||0)>0) ? (
+                                <Pill key={e.id} tone="sky">{(e.abbr||e.name)} {Number(r.equipment[e.id]||0)}</Pill>
+                              ) : null)}
+                            </div>
+                          ) : null}
+                          {isLoggedIn && onEdit ? (
+                            <div className="mt-2 flex gap-2 no-print">
+                              <button className="px-3 py-2 rounded-2xl bg-white border border-slate-200 font-black text-slate-700" onClick={(ev)=>{ ev.stopPropagation(); onEdit(r); }}>編集</button>
+                            </div>
+                          ) : null}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+
+    /**********************
+     * Import Modal (bulk import)
+     **********************/
+    function ImportModal({open, fyInfo, roomsActive, roomsMap, equipmentsActive, isLoggedIn, importText, setImportText, importPreview, setImportPreview, importBusy, setImportBusy, bumpWrites, bumpReads, setToast, onDone}){
+      const templateHeaders = useMemo(() => {
+        const base = ["日付","開始","終了","部屋","団体名","メモ"];
+        const eq = equipmentsActive.map(e => e.abbr || e.id);
+        return base.concat(eq);
+      }, [equipmentsActive]);
+
+      const roomIndex = useMemo(() => {
+        const idx = {};
+        for(const r of roomsActive||[]){
+          idx[String(r.id).toLowerCase()] = r.id;
+          idx[String(r.name).toLowerCase()] = r.id;
+          idx[`${String(r.building||"")}/${String(r.name||"")}`.toLowerCase()] = r.id;
+          idx[`${String(r.building||"")} ${String(r.name||"")}`.toLowerCase()] = r.id;
+        }
+        return idx;
+      }, [roomsActive]);
+
+      const eqIndex = useMemo(() => {
+        const idx = {};
+        for(const e of equipmentsActive||[]){
+          idx[String(e.id).toLowerCase()] = e.id;
+          if(e.abbr) idx[String(e.abbr).toLowerCase()] = e.id;
+          idx[String(e.name).toLowerCase()] = e.id;
+        }
+        return idx;
+      }, [equipmentsActive]);
+
+      const detectDelimiter = (firstLine) => (String(firstLine||"").includes("\t") ? "\t" : ",");
+
+      const splitLine = (line, delim) => {
+        const s = String(line||"");
+        if(delim === "\t") return s.split("\t");
+        // basic CSV (supports quotes)
+        const res = [];
+        let cur = "";
+        let inQ = false;
+        for(let i=0;i<s.length;i++){
+          const ch = s[i];
+          if(ch === '"'){
+            if(inQ && s[i+1] === '"'){ cur += '"'; i++; }
+            else inQ = !inQ;
+          } else if(ch === ',' && !inQ){
+            res.push(cur);
+            cur = "";
+          } else {
+            cur += ch;
+          }
+        }
+        res.push(cur);
+        return res;
+      };
+
+      const norm = (v) => String(v ?? "").trim();
+      const normKey = (v) => norm(v).toLowerCase().replace(/\s/g, "");
+
+      const makeHeaderIndex = (headers) => {
+        const hs = headers.map(normKey);
+        const find = (keys) => {
+          for(const k of keys){
+            const i = hs.indexOf(k);
+            if(i>=0) return i;
+          }
+          return -1;
+        };
+        const map = {
+          date: find(["日付","date","年月日","ymd" ]),
+          start: find(["開始","start","starttime","開始時刻","開始時間" ]),
+          end: find(["終了","end","endtime","終了時刻","終了時間" ]),
+          room: find(["部屋","場所","room","roomid","roomname" ]),
+          group: find(["団体名","予約名","団体","title","name","group","利用者" ]),
+          note: find(["メモ","備考","note","notes" ])
+        };
+        const eqCols = {}; // colIndex -> equipmentId
+        headers.forEach((h, i) => {
+          const k = normKey(h);
+          if(eqIndex[k]) eqCols[i] = eqIndex[k];
+        });
+        return {map, eqCols};
+      };
+
+      const [showSample, setShowSample] = useState(false);
+      const [fileName, setFileName] = useState("");
+      const [showRaw, setShowRaw] = useState(false);
+
+      const buildPreview = () => {
+        const raw = String(importText||"").trim();
+        if(!raw){
+          setImportPreview(null);
+          return;
+        }
+        const lines = raw.split(/\r?\n/).filter(l => String(l||"").trim() !== "");
+        if(lines.length === 0){
+          setImportPreview(null);
+          return;
+        }
+        const delim = detectDelimiter(lines[0]);
+        const first = splitLine(lines[0], delim);
+        const headerLike = first.some(c => /日付|date/i.test(String(c||"")));
+        const headers = headerLike ? first : templateHeaders;
+        const startIdx = headerLike ? 1 : 0;
+        const {map, eqCols} = makeHeaderIndex(headers);
+
+        const rows = [];
+        const addRow = (obj) => rows.push(obj);
+
+        for(let i=startIdx;i<lines.length;i++){
+          const cells = splitLine(lines[i], delim);
+          const get = (idx) => (idx>=0 && idx<cells.length) ? norm(cells[idx]) : "";
+          const errors = [];
+          const warns = [];
+
+          const dateRaw = get(map.date);
+          const startRaw = get(map.start);
+          const endRaw = get(map.end);
+          const roomRaw = get(map.room);
+          const groupRaw = get(map.group);
+          const noteRaw = get(map.note);
+
+          const dk = parseDateLooseToKey(dateRaw);
+          if(!dk) errors.push(`日付が読めません: ${dateRaw}`);
+          const sMin = parseHHMMLoose(startRaw);
+          const eMin = parseHHMMLoose(endRaw);
+          if(sMin==null) errors.push(`開始が読めません: ${startRaw}`);
+          if(eMin==null) errors.push(`終了が読めません: ${endRaw}`);
+          if(sMin!=null && eMin!=null && eMin <= sMin) errors.push(`終了<=開始 (${startRaw}〜${endRaw})`);
+
+          let roomId = "";
+          const rk = normKey(roomRaw);
+          if(rk && roomIndex[rk]) roomId = roomIndex[rk];
+          if(!roomId) errors.push(`部屋が見つかりません: ${roomRaw}`);
+
+          if(!groupRaw) errors.push("団体名が空です");
+
+          // fiscal-year guard (warn and skip)
+          let skip = false;
+          if(dk && (dk < fyInfo.start || dk > fyInfo.end)){
+            warns.push(`年度外のためスキップ: ${dk}`);
+            skip = true;
+          }
+
+          const equipment = {};
+          for(const [col, eid] of Object.entries(eqCols)){
+            const v = get(Number(col));
+            if(v === "") continue;
+            const n = Number(String(v).replace(/[^0-9.-]/g, ""));
+            if(Number.isFinite(n) && n>0) equipment[eid] = Math.floor(n);
+            else if(v) errors.push(`機材(${headers[Number(col)]})が数値でありません: ${v}`);
+          }
+
+          const model = (errors.length===0 && !skip) ? {
+            date: dk,
+            roomId,
+            startMin: sMin,
+            endMin: eMin,
+            groupName: groupRaw,
+            note: noteRaw,
+            equipment,
+            updatedAt: serverTimestamp(),
+          } : null;
+
+          addRow({ line: i+1, raw: lines[i], errors, warns, skip, model });
+        }
+
+        // overlap check inside import set
+        const buckets = {};
+        rows.forEach((r, idx) => {
+          if(!r.model) return;
+          const key = `${r.model.date}|${r.model.roomId}`;
+          if(!buckets[key]) buckets[key] = [];
+          buckets[key].push({idx, r});
+        });
+        Object.values(buckets).forEach(arr => {
+          arr.sort((a,b)=>a.r.model.startMin - b.r.model.startMin);
+          for(let i=1;i<arr.length;i++){
+            const prev = arr[i-1].r.model;
+            const cur = arr[i].r.model;
+            if(cur.startMin < prev.endMin){
+              arr[i].r.errors.push("同じ部屋で時間が重なっています（インポート内）");
+              arr[i-1].r.errors.push("同じ部屋で時間が重なっています（インポート内）");
+              arr[i].r.model = null;
+              arr[i-1].r.model = null;
+            }
+          }
+        });
+
+        const ok = rows.filter(r => r.model && r.errors.length===0 && !r.skip).length;
+        const ng = rows.filter(r => r.errors.length>0).length;
+        const skipped = rows.filter(r => r.skip).length;
+        setImportPreview({ headers, rows, ok, ng, skipped });
+      };
+
+      const runImport = async () => {
+        if(!isLoggedIn){
+          setToast({type:"ng", msg:"ログイン中のみインポートできます"});
+          setTimeout(()=>setToast(null), 2500);
+          return;
+        }
+        const rows = importPreview?.rows || [];
+        const valids = rows.filter(r => r.model && r.errors.length===0 && !r.skip);
+        if(valids.length===0){
+          setToast({type:"ng", msg:"インポートできる行がありません"});
+          setTimeout(()=>setToast(null), 2500);
+          return;
+        }
+        setImportBusy(true);
+        try{
+          const CHUNK = 420;
+          for(let i=0;i<valids.length;i+=CHUNK){
+            const slice = valids.slice(i, i+CHUNK);
+            const batch = db.batch();
+            slice.forEach(row => {
+              const m = row.model;
+              const id = deterministicIdForReservation(m);
+              const ref = db.collection("reservations").doc(id);
+              const payload = {
+                date: m.date,
+                roomId: m.roomId,
+                startMin: m.startMin,
+                endMin: m.endMin,
+                groupName: m.groupName,
+                note: m.note,
+                equipment: m.equipment,
+                updatedAt: serverTimestamp(),
+              };
+              batch.set(ref, payload, {merge:true});
+            });
+            await batch.commit();
+            bumpWrites(slice.length);
+          }
+          await touchRevisionDoc("reservation_import");
+          setToast({type:"ok", msg:`インポート完了：${valids.length}件（年度：${fyInfo.label}）`});
+          setTimeout(()=>setToast(null), 3500);
+          setImportPreview(null);
+          // keep text for re-run; user can clear manually
+          await onDone?.();
+        }catch(e){
+          console.error(e);
+          setToast({type:"ng", msg:"インポートに失敗しました"});
+          setTimeout(()=>setToast(null), 3500);
+        }finally{
+          setImportBusy(false);
+        }
+      };
+
+      const sampleText = useMemo(() => {
+        const header = templateHeaders.join(",");
+        const room = (roomsActive && roomsActive[0]) ? roomsActive[0].name : "会議室";
+        const line1 = `${fyInfo.fy}-04-10,09:00,10:00,${room},職員会議,,1`;
+        return `${header}
+${line1}`;
+      }, [templateHeaders, fyInfo, roomsActive]);
+
+      return (
+        <div className="space-y-3">
+          <div className="rounded-3xl border border-slate-100 bg-slate-50 p-4">
+            <div className="font-black text-slate-800">CSVファイルで年間一括インポート</div>
+            <div className="text-sm font-bold text-slate-700 mt-2 space-y-1">
+              <div>・1行目はヘッダー推奨：{templateHeaders.slice(0,6).join(" / ")} ...</div>
+              <div>・形式は <strong>CSV</strong>（Excelの「CSV UTF-8」推奨）。</div>
+              <div>・部屋は「名前」か「建物/名前」でもOK。</div>
+              <div>・機材は列名を <strong>略称</strong> または 機材ID にすると認識します。</div>
+              <div className="text-slate-500">※年度外はスキップ（警告）になります。</div>
+            </div>
+            <div className="mt-3 flex items-center gap-2">
+              <button className="px-4 py-2 rounded-2xl bg-white border border-slate-200 font-black text-slate-700" onClick={()=>setShowSample(s=>!s)}>テンプレ/例を{showSample?"閉じる":"表示"}</button>
+              {isLoggedIn ? (
+                <button className="px-4 py-2 rounded-2xl bg-slate-900 text-white font-black disabled:opacity-50" disabled={importBusy} onClick={buildPreview}>プレビュー作成</button>
+              ) : (
+                <Pill tone="rose">ログイン中のみ操作可</Pill>
+              )}
+              {isLoggedIn ? (
+                <button className="px-4 py-2 rounded-2xl bg-sky-600 text-white font-black disabled:opacity-50" disabled={importBusy || !(importPreview?.ok>0)} onClick={runImport}>インポート実行</button>
+              ) : null}
+            </div>
+            {showSample ? (
+              <div className="mt-3">
+                <div className="text-xs font-black text-slate-500">テンプレ（CSV）</div>
+                <pre className="mt-2 text-xs font-mono bg-white border border-slate-200 rounded-2xl p-3 overflow-auto">{sampleText}</pre>
+              </div>
+            ) : null}
+          </div>
+
+          <div className="rounded-3xl border border-slate-100 bg-white p-4">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <div>
+                <div className="text-xs font-black text-slate-500">CSVファイルを選択</div>
+                <div className="text-sm font-bold text-slate-700 mt-1">{fileName ? fileName : '未選択'}</div>
+              </div>
+              <button className="px-4 py-2 rounded-2xl bg-white border border-slate-200 font-black text-slate-700" onClick={()=>setShowRaw(s=>!s)} type="button">
+                {showRaw ? '内容を閉じる' : '内容を確認'}
+              </button>
+            </div>
+            <div className="mt-3">
+              <input
+                type="file"
+                accept=".csv,text/csv"
+                className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 font-bold text-slate-700"
+                disabled={importBusy}
+                onChange={(e)=>{
+                  const file = e.target.files && e.target.files[0];
+                  if(!file) return;
+                  setFileName(file.name || 'selected.csv');
+                  const reader = new FileReader();
+                  reader.onload = () => {
+                    const t = String(reader.result||'');
+                    setImportText(t);
+                    setImportPreview(null);
+                    setToast?.({ type:'ok', msg:'CSVを読み込みました（プレビュー作成を押してください）' });
+                    setTimeout(()=>setToast?.(null), 2200);
+                  };
+                  reader.onerror = () => {
+                    setToast?.({ type:'ng', msg:'CSVの読み込みに失敗しました' });
+                    setTimeout(()=>setToast?.(null), 2500);
+                  };
+                  reader.readAsText(file);
+                }}
+              />
+              <div className="text-[11px] font-bold text-slate-400 mt-2">※文字化けする場合は Excelの「CSV UTF-8」で保存してください。</div>
+            </div>
+            {showRaw && importText ? (
+              <textarea
+                value={importText}
+                readOnly
+                className="mt-3 w-full min-h-[180px] rounded-3xl border border-slate-200 bg-white p-4 font-mono text-xs"
+              />
+            ) : null}
+          </div>
+
+          {importPreview ? (
+            <div className="rounded-3xl border border-slate-100 bg-white p-4">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <div className="font-black text-slate-800">プレビュー</div>
+                <div className="flex gap-2">
+                  <Pill tone="emerald">OK {importPreview.ok}</Pill>
+                  <Pill tone="rose">NG {importPreview.ng}</Pill>
+                  <Pill tone="slate">SKIP {importPreview.skipped}</Pill>
+                </div>
+              </div>
+              <div className="mt-3 max-h-[45vh] overflow-auto pr-1">
+                {importPreview.rows.slice(0, 60).map((r, idx) => (
+                  <div key={idx} className={classNames(
+                    "rounded-2xl border p-3 mb-2",
+                    r.model ? "border-emerald-200 bg-emerald-50" : (r.skip ? "border-slate-200 bg-slate-50" : "border-rose-200 bg-rose-50")
+                  )}>
+                    <div className="text-xs font-black text-slate-600">{r.line}行目</div>
+                    <div className="text-sm font-bold text-slate-800 break-words mt-1">{r.raw}</div>
+                    {r.errors.length ? (
+                      <div className="text-xs font-black text-rose-700 mt-2">{r.errors.join(" / ")}</div>
+                    ) : null}
+                    {(!r.errors.length && r.warns.length) ? (
+                      <div className="text-xs font-black text-slate-600 mt-2">{r.warns.join(" / ")}</div>
+                    ) : null}
+                  </div>
+                ))}
+                {importPreview.rows.length>60 ? (
+                  <div className="text-xs font-bold text-slate-400">…残り {importPreview.rows.length-60} 行（表示は最大60行）</div>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
+        </div>
+      );
+    }
     /**********************
      * Room Manager
      **********************/
@@ -1512,6 +2964,7 @@
         };
         await db.collection("rooms").doc(r.id).set(payload, { merge:true });
         bumpWrites(1);
+        await touchRevisionDoc("rooms");
         onSaved();
       }
 
@@ -1536,6 +2989,7 @@
           updatedAt: serverTimestamp(),
         }, { merge:true });
         bumpWrites(1);
+        await touchRevisionDoc("rooms");
         setDraft({ id:"", building: draft.building || "本館", name:"", order: Number(draft.order||100), active:true });
         onSaved();
       }
@@ -1639,6 +3093,7 @@
         };
         await db.collection("equipments").doc(e.id).set(payload, { merge:true });
         bumpWrites(1);
+        await touchRevisionDoc("equipments");
         onSaved();
       }
 
@@ -1664,6 +3119,7 @@
           updatedAt: serverTimestamp(),
         }, { merge:true });
         bumpWrites(1);
+        await touchRevisionDoc("equipments");
         setDraft({ id:"", name:"", abbr:"", countTotal: 0, order: Number(draft.order||100), active:true });
         onSaved();
       }
